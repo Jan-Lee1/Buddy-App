@@ -1,9 +1,11 @@
 /**
  * 个人管理系统 - 本地代理服务器
- * 功能：静态文件服务 + 飞书 API 反向代理 + DashScope AI 代理
+ * 功能：静态文件服务 + 飞书 API 反向代理 + DashScope AI 代理 + 语音转写
  * 启动：node server.js
  * 环境变量：
- *   DASHSCOPE_API_KEY  - 阿里云 DashScope API Key（通过环境变量读取，不硬编码）
+ *   DASHSCOPE_API_KEY   - 阿里云 DashScope API Key
+ *   FEISHU_APP_ID       - 飞书应用 App ID
+ *   FEISHU_APP_SECRET   - 飞书应用 App Secret
  * 零依赖，纯 Node.js 内置模块
  */
 const http = require('http');
@@ -16,12 +18,23 @@ const STATIC_DIR = __dirname;
 const FEISHU_HOST = 'open.feishu.cn';
 const DASHSCOPE_HOST = 'dashscope.aliyuncs.com';
 
-// API Key 通过环境变量读取，绝不硬编码
+// ── 环境变量加载 ──────────────────────────────────────────
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || '';
+const FEISHU_APP_ID = process.env.FEISHU_APP_ID || '';
+const FEISHU_APP_SECRET = process.env.FEISHU_APP_SECRET || '';
+
 if (DASHSCOPE_API_KEY) {
   console.log('[DashScope] API Key 已从环境变量加载 (' + DASHSCOPE_API_KEY.substring(0, 8) + '***)');
 } else {
-  console.log('[DashScope] 未设置 DASHSCOPE_API_KEY 环境变量，AI 代理将不可用');
+  console.log('[DashScope] 未设置 DASHSCOPE_API_KEY 环境变量，AI/转写功能将不可用');
+}
+
+if (FEISHU_APP_ID && FEISHU_APP_SECRET) {
+  console.log('[Feishu] App ID/Secret 已从环境变量加载 (App ID: ' + FEISHU_APP_ID.substring(0, 8) + '***)');
+} else if (FEISHU_APP_ID || FEISHU_APP_SECRET) {
+  console.log('[Feishu] ⚠️ FEISHU_APP_ID 和 FEISHU_APP_SECRET 需要同时设置');
+} else {
+  console.log('[Feishu] 未设置 FEISHU_APP_ID/FEISHU_APP_SECRET，将通过前端透传凭据');
 }
 
 // MIME 类型映射
@@ -233,6 +246,81 @@ function proxyToFeishu(req, res) {
     }
     proxyReq.end();
   });
+}
+
+/* ================================================================
+ *  FEISHU TOKEN: 服务端获取飞书 Tenant Access Token
+ *  使用环境变量 FEISHU_APP_ID / FEISHU_APP_SECRET，凭据不暴露给前端
+ * ================================================================ */
+function proxyFeishuToken(req, res) {
+  if (!FEISHU_APP_ID || !FEISHU_APP_SECRET) {
+    // 未配置环境变量 → 回退到透传模式，由前端自行发送凭据
+    proxyToFeishu(req, res);
+    return;
+  }
+
+  const postData = JSON.stringify({
+    app_id: FEISHU_APP_ID,
+    app_secret: FEISHU_APP_SECRET
+  });
+
+  console.log(`[FeishuToken] 使用服务端凭据获取 Token`);
+
+  const options = {
+    hostname: FEISHU_HOST,
+    port: 443,
+    path: '/open-apis/auth/v3/tenant_access_token/internal',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=UTF-8',
+      'Content-Length': String(Buffer.byteLength(postData)),
+    },
+    timeout: 10000,
+  };
+
+  const proxyReq = https.request(options, (proxyRes) => {
+    let data = '';
+    proxyRes.on('data', (chunk) => { data += chunk; });
+    proxyRes.on('end', () => {
+      try {
+        const json = JSON.parse(data);
+        console.log(`[FeishuToken] Response ${proxyRes.statusCode}: code=${json.code}, msg=${json.msg}`);
+        res.writeHead(proxyRes.statusCode, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(data);
+      } catch (e) {
+        console.error('[FeishuToken] 解析响应失败:', e.message);
+        res.writeHead(502, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+        });
+        res.end(JSON.stringify({ code: -1, msg: '飞书Token响应解析失败' }));
+      }
+    });
+  });
+
+  proxyReq.on('error', (err) => {
+    console.error('[FeishuToken Error]', err.message);
+    res.writeHead(502, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify({ code: -1, msg: '飞书Token获取失败: ' + err.message }));
+  });
+
+  proxyReq.on('timeout', () => {
+    proxyReq.destroy();
+    res.writeHead(504, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify({ code: -1, msg: '飞书Token获取超时' }));
+  });
+
+  proxyReq.write(postData);
+  proxyReq.end();
 }
 
 /* ================================================================
@@ -486,6 +574,12 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Proxy /api/feishu/token → 服务端获取飞书 Token（BEFORE /api/ general）
+  if (req.url === '/api/feishu/token' && req.method === 'POST') {
+    proxyFeishuToken(req, res);
+    return;
+  }
+
   // Proxy /api/transcribe → DashScope Paraformer 语音转写 (BEFORE /api/ general)
   if (req.url === '/api/transcribe' && req.method === 'POST') {
     proxyToTranscribe(req, res);
@@ -513,8 +607,9 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log('╔══════════════════════════════════════════╗');
   console.log('║   个人管理系统 · 已启动                  ║');
   console.log('║   http://localhost:' + PORT + '                    ║');
-  console.log('║   飞书代理: /api → open.feishu.cn       ║');
-  console.log('║   AI 代理:  /api/dashscope → dashscope  ║');
+  console.log('║   飞书Token:  /api/feishu/token          ║');
+  console.log('║   飞书代理:  /api → open.feishu.cn       ║');
+  console.log('║   AI 代理:   /api/dashscope → dashscope  ║');
   console.log('║   语音转写:  /api/transcribe → Paraformer ║');
   console.log('╚══════════════════════════════════════════╝');
   console.log('');
