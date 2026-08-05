@@ -1,0 +1,2771 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>个人管理系统 · 飞书同步</title>
+<style>
+/* ===== Variables ===== */
+:root{
+  --bg:#f2f3f5;--card:#ffffff;--text:#1d1d1f;--sub:#86868b;
+  --blue:#2E75B6;--green:#2FA84E;--orange:#F0993C;--red:#EA3E3E;
+  --purple:#7B4FE4;--teal:#2FA8A0;--pink:#E0447E;
+  --gray:#e2e3e7;--grayLight:#f7f7f8;--radius:12px;
+  --shadow:0 1px 4px rgba(0,0,0,.06);--shadowLg:0 4px 20px rgba(0,0,0,.1);
+  --nav-w:220px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",Roboto,sans-serif;background:var(--bg);color:var(--text);height:100dvh;display:flex;overflow:hidden}
+/* ===== Sidebar ===== */
+.sidebar{
+  width:var(--nav-w);background:var(--card);border-right:1px solid var(--gray);
+  display:flex;flex-direction:column;z-index:30;flex-shrink:0;
+  transition:transform .3s;
+}
+.sidebar-brand{padding:18px 16px 12px;font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--gray);}
+.sidebar-brand .logo{
+  width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--blue),var(--purple));
+  display:flex;align-items:center;justify-content:center;font-size:18px;color:#fff;
+}
+.nav-items{flex:1;overflow-y:auto;padding:8px;}
+.nav-items::-webkit-scrollbar{width:3px}.nav-items::-webkit-scrollbar-thumb{background:#ccc;border-radius:3px;}
+.nav-item{
+  display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:10px;cursor:pointer;
+  font-size:14px;font-weight:500;color:var(--text);transition:all .15s;margin-bottom:2px;
+  border:1px solid transparent;
+}
+.nav-item:hover{background:var(--grayLight);}
+.nav-item.active{background:#e8f0fe;border-color:#c5d9f6;color:var(--blue);font-weight:600;}
+.nav-item .badge{font-size:11px;background:var(--orange);color:#fff;padding:2px 8px;border-radius:10px;margin-left:auto;font-weight:600;min-width:22px;text-align:center;}
+.nav-item .badge.zero{background:#ccc;}
+.sidebar-bottom{padding:12px 8px;border-top:1px solid var(--gray);display:flex;flex-direction:column;gap:4px;}
+.sidebar-bottom .nav-item{font-size:13px;}
+
+/* ===== Main Panel ===== */
+.main-panel{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden;}
+
+/* ===== Module View ===== */
+.module-view{display:none;flex-direction:column;height:100%;}
+.module-view.active{display:flex;}
+.module-header{
+  padding:14px 20px;font-size:20px;font-weight:700;display:flex;align-items:center;gap:8px;
+  background:var(--card);border-bottom:1px solid var(--gray);flex-shrink:0;
+}
+
+/* ===== Input Area ===== */
+.input-area{padding:12px 20px;background:var(--card);border-bottom:1px solid var(--gray);flex-shrink:0;}
+.input-row{display:flex;gap:8px;align-items:flex-end;}
+.input-row textarea{
+  flex:1;border:1px solid var(--gray);border-radius:10px;padding:10px 14px;font-size:14px;
+  resize:none;max-height:80px;outline:none;font-family:inherit;line-height:1.4;background:var(--grayLight);
+  transition:border-color .2s;
+}
+.input-row textarea:focus{border-color:var(--blue);background:#fff;}
+.input-row .btn-icon{
+  width:40px;height:40px;border-radius:50%;border:1px solid var(--gray);background:var(--card);
+  font-size:16px;cursor:pointer;transition:all .15s;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+}
+.input-row .btn-icon:hover{background:var(--grayLight);}
+.input-row .btn-send{background:var(--blue);color:#fff;border-color:var(--blue);font-size:18px;}
+.input-row .btn-send:hover{background:#1d5fa5;}
+.input-row .btn-send:disabled{background:#ccc;border-color:#ccc;cursor:not-allowed;}
+.input-row .btn-clear{font-size:14px;color:var(--sub);border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;border:1px solid transparent;background:transparent;transition:all .15s;}
+.input-row .btn-clear:hover{background:var(--grayLight);color:var(--red);border-color:var(--gray);}
+.input-hint{font-size:11px;color:var(--sub);margin-top:6px;padding-left:2px;}
+
+/* ===== Records List ===== */
+.records-scroll{flex:1;overflow-y:auto;padding:12px 20px 20px;}
+.records-scroll::-webkit-scrollbar{width:4px}.records-scroll::-webkit-scrollbar-thumb{background:#ccc;border-radius:4px;}
+.records-empty{text-align:center;color:var(--sub);padding:60px 20px;font-size:14px;}
+.records-empty .empty-icon{font-size:40px;margin-bottom:12px;opacity:.5;}
+
+.record-card{
+  background:var(--card);border-radius:var(--radius);padding:14px 16px;margin-bottom:8px;
+  box-shadow:var(--shadow);display:flex;align-items:flex-start;gap:12px;transition:all .15s;
+  border:1px solid transparent;
+}
+.record-card:hover{box-shadow:var(--shadowLg);}
+.record-card.pending{border-color:#e0d8c0;background:#fffef9;}
+.record-card.pending .sync-dot{color:var(--orange);}
+.record-card.synced .sync-dot{color:var(--green);}
+.record-card .sync-dot{font-size:16px;flex-shrink:0;margin-top:1px;}
+.record-card .card-body{flex:1;min-width:0;}
+.record-card .card-fields{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:13px;line-height:1.6;}
+.record-card .card-field{display:flex;gap:4px;}
+.record-card .card-key{color:var(--sub);font-size:12px;flex-shrink:0;}
+.record-card .card-val{font-weight:500;}
+.record-card .card-amount{font-weight:700;}
+.record-card .card-amount.income{color:var(--green);}.record-card .card-amount.expense{color:var(--red);}
+.record-card .card-actions{margin-left:auto;display:flex;gap:4px;}
+.record-card .card-actions button{background:none;border:none;cursor:pointer;font-size:14px;padding:4px 6px;border-radius:6px;opacity:.4;transition:all .15s;}
+.record-card .card-actions button:hover{opacity:1;background:var(--grayLight);}
+
+/* ===== Habit Grid ===== */
+.habit-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;}
+.habit-item{display:flex;align-items:center;gap:8px;padding:10px 14px;border:1px solid var(--gray);border-radius:10px;cursor:pointer;transition:all .15s;font-size:14px;background:var(--card);}
+.habit-item:hover{background:var(--grayLight);}
+.habit-item input{width:16px;height:16px;accent-color:var(--blue);}
+.habit-item.checked{background:#e6f4ea;border-color:#a3d4b0;}
+
+/* ===== Preview Card ===== */
+.preview-card{background:var(--grayLight);border-radius:var(--radius);padding:14px;margin:12px 20px;border:1px solid var(--gray);font-size:13px;}
+.preview-card h4{font-size:12px;color:var(--sub);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;}
+.preview-card .pv-row{display:flex;justify-content:space-between;padding:3px 0;font-size:13px;}
+.preview-card .pv-key{color:var(--sub);}
+
+/* ===== Module Sync Row ===== */
+.module-sync-row{
+  display:none;align-items:center;justify-content:space-between;gap:10px;
+  padding:10px 16px;background:var(--grayLight);border-radius:12px;
+  margin:12px 0 8px;font-size:13px;
+}
+.module-sync-row .sync-info{color:var(--sub);font-weight:500;}
+.module-sync-row .sync-info strong{color:var(--orange);}
+.module-sync-row .sync-info strong.none{color:var(--green);}
+.module-sync-row .btn-mod-sync{
+  padding:6px 16px;border-radius:16px;border:none;background:var(--blue);color:#fff;
+  font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;
+}
+.module-sync-row .btn-mod-sync:hover{background:#1d5fa5;}
+.module-sync-row .btn-mod-sync:disabled{background:#ccc;cursor:not-allowed;}
+.module-sync-row .btn-mod-sync:active{transform:scale(.96);}
+.module-sync-row .sync-detail{font-size:11px;color:var(--sub);margin-top:2px;}
+
+/* ===== Modals ===== */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:100;animation:fadeIn .2s;}
+.modal{background:var(--card);border-radius:16px;padding:24px;width:min(90vw,460px);max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2);}
+.modal h2{font-size:18px;margin-bottom:14px;}
+.modal label{font-size:12px;color:var(--sub);display:block;margin-bottom:4px;margin-top:14px;}
+.modal input,.modal select{width:100%;padding:10px 14px;border:1px solid var(--gray);border-radius:10px;font-size:14px;outline:none;font-family:inherit;background:var(--grayLight);}
+.modal input:focus,.modal select:focus{border-color:var(--blue);background:#fff;}
+.modal .actions{display:flex;gap:10px;margin-top:20px;}
+.modal .actions button{flex:1;padding:10px;border-radius:12px;border:none;font-size:14px;font-weight:600;cursor:pointer;transition:all .15s;}
+.modal .btn-primary{background:var(--blue);color:#fff;}.modal .btn-primary:hover{background:#1d5fa5;}
+.modal .btn-secondary{background:var(--grayLight);color:var(--text);}.modal .btn-secondary:hover{background:var(--gray);}
+.modal .btn-danger{background:var(--red);color:#fff;}.modal .btn-danger:hover{background:#c53030;}
+
+/* ===== Voice Button ===== */
+.voice-btn{width:40px;height:40px;border-radius:50%;border:1px solid var(--gray);background:var(--card);font-size:18px;cursor:pointer;transition:all .15s;flex-shrink:0;display:flex;align-items:center;justify-content:center;}
+.voice-btn:hover{background:var(--grayLight);}
+.voice-btn.recording{background:var(--red);color:#fff;border-color:var(--red);animation:pulse 1.2s infinite;}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(234,62,62,.4)}70%{box-shadow:0 0 0 10px rgba(234,62,62,0)}100%{box-shadow:0 0 0 0 rgba(234,62,62,0)}}
+
+/* ===== Toast ===== */
+.toast-container{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:200;display:flex;flex-direction:column;gap:8px;pointer-events:none;}
+.toast{padding:10px 24px;border-radius:10px;font-size:14px;font-weight:500;box-shadow:0 4px 16px rgba(0,0,0,.15);animation:toastIn .3s ease;pointer-events:auto;}
+.toast.success{background:#e6f4ea;color:#1a6e32;border:1px solid #a3d4b0;}
+.toast.error{background:#fce8e6;color:#b3261e;border:1px solid #f5c6cb;}
+.toast.info{background:#e8f0fe;color:#1a4a8a;border:1px solid #a8c8f0;}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes toastIn{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:translateY(0)}}
+
+/* ===== Category Selector ===== */
+.cat-row{display:flex;flex-wrap:wrap;gap:6px;}
+.cat-chip{padding:6px 14px;border-radius:20px;border:1px solid var(--gray);background:var(--card);font-size:12px;cursor:pointer;transition:all .15s;white-space:nowrap;}
+.cat-chip:hover{background:var(--grayLight);}
+.cat-chip.selected{background:var(--blue);color:#fff;border-color:var(--blue);}
+
+/* ===== Hidden ===== */
+.hidden{display:none!important;}
+
+/* ===== Shopping Cart Preview ===== */
+.cart-preview{background:var(--grayLight);border-radius:var(--radius);padding:10px 14px;margin-top:8px;border:1px solid var(--gray);font-size:13px;display:none;}
+.cart-preview.show{display:block;}
+.cart-preview h4{font-size:12px;color:var(--sub);margin-bottom:6px;display:flex;align-items:center;gap:8px;}
+.cart-preview .cart-item{display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px dashed #e0e0e0;}
+.cart-preview .cart-item:last-child{border-bottom:none;}
+.cart-preview .cart-item-name{font-weight:500;}
+.cart-preview .cart-item-price{color:var(--red);font-weight:600;}
+.cart-preview .cart-item-remove{cursor:pointer;opacity:.4;font-size:12px;padding:2px 6px;border-radius:4px;transition:all .15s;}
+.cart-preview .cart-item-remove:hover{opacity:1;background:#fee;}
+.cart-preview .cart-total{padding-top:6px;margin-top:4px;border-top:1px solid var(--gray);text-align:right;font-weight:700;color:var(--red);}
+.cart-preview .cart-actions{display:flex;gap:6px;margin-top:8px;justify-content:flex-end;}
+.cart-preview .cart-actions button{padding:5px 12px;border-radius:6px;border:1px solid var(--gray);font-size:12px;cursor:pointer;transition:all .15s;}
+.cart-preview .cart-actions .btn-cart-save{background:var(--blue);color:#fff;border-color:var(--blue);}
+.cart-preview .cart-actions .btn-cart-save:hover{background:#1d5fa5;}
+.cart-preview .cart-actions .btn-cart-clear{background:#fff;color:var(--red);}
+.cart-preview .cart-actions .btn-cart-clear:hover{background:#fee;}
+
+/* ===== AI Confirm Toast ===== */
+.ai-confirm-bar{
+  background:#e8f0fe;border:1px solid #a8c8f0;border-radius:10px;padding:8px 14px;margin-top:8px;
+  display:none;align-items:center;gap:8px;font-size:13px;
+}
+.ai-confirm-bar.show{display:flex;}
+.ai-confirm-bar .btn-confirm{padding:4px 12px;border-radius:6px;border:none;font-size:12px;cursor:pointer;font-weight:600;transition:all .15s;}
+.ai-confirm-bar .btn-confirm-yes{background:var(--green);color:#fff;}
+.ai-confirm-bar .btn-confirm-no{background:var(--gray);color:var(--text);}
+
+/* ===== Debug Panel ===== */
+.debug-toggle{
+  position:fixed;bottom:12px;right:12px;z-index:150;width:40px;height:40px;
+  border-radius:50%;background:var(--card);border:2px solid var(--gray);font-size:16px;
+  cursor:pointer;box-shadow:var(--shadowLg);display:flex;align-items:center;justify-content:center;
+  transition:all .2s;
+}
+.debug-toggle:hover{background:var(--grayLight);border-color:var(--blue);}
+.debug-toggle.active{background:var(--blue);color:#fff;border-color:var(--blue);}
+.debug-panel{
+  position:fixed;bottom:60px;right:12px;z-index:149;width:380px;max-height:450px;
+  background:var(--card);border-radius:14px;box-shadow:0 8px 40px rgba(0,0,0,.18);
+  border:1px solid var(--gray);display:none;flex-direction:column;overflow:hidden;
+  animation:slideUp .25s ease;
+}
+.debug-panel.show{display:flex;}
+@keyframes slideUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+.debug-header{
+  padding:10px 14px;background:var(--grayLight);border-bottom:1px solid var(--gray);
+  display:flex;align-items:center;justify-content:space-between;flex-shrink:0;
+}
+.debug-header h4{font-size:13px;margin:0;display:flex;align-items:center;gap:6px;}
+.debug-tabs{display:flex;gap:2px;padding:6px 10px;background:var(--grayLight);flex-shrink:0;}
+.debug-tab{
+  padding:4px 10px;border-radius:6px;border:none;font-size:11px;cursor:pointer;
+  background:transparent;color:var(--sub);transition:all .15s;
+}
+.debug-tab:hover{background:#e0e0e0;}
+.debug-tab.active{background:var(--blue);color:#fff;}
+.debug-content{flex:1;overflow-y:auto;padding:8px 10px;font-size:11px;font-family:'SF Mono','Menlo','Consolas',monospace;line-height:1.6;}
+.debug-content::-webkit-scrollbar{width:3px;}.debug-content::-webkit-scrollbar-thumb{background:#ccc;border-radius:3px;}
+.debug-log{display:flex;gap:6px;padding:2px 0;border-bottom:1px solid #f5f5f5;}
+.debug-log .log-time{color:var(--sub);flex-shrink:0;white-space:nowrap;}
+.debug-log .log-tag{padding:0 4px;border-radius:3px;font-size:10px;font-weight:600;flex-shrink:0;}
+.debug-log .log-tag.info{background:#e8f0fe;color:var(--blue);}
+.debug-log .log-tag.warn{background:#fff3e0;color:var(--orange);}
+.debug-log .log-tag.err{background:#fce8e6;color:var(--red);}
+.debug-log .log-tag.ok{background:#e6f4ea;color:var(--green);}
+.debug-log .log-tag.rule{background:#f3e8ff;color:var(--purple);}
+.debug-log .log-msg{word-break:break-all;}
+.debug-rule-item{
+  padding:6px 8px;margin:4px 0;background:var(--grayLight);border-radius:6px;
+  border-left:3px solid var(--purple);font-size:11px;
+}
+.debug-rule-item .rule-pattern{color:var(--blue);font-weight:600;}
+.debug-rule-item .rule-meta{color:var(--sub);font-size:10px;margin-top:2px;}
+.debug-empty{text-align:center;color:var(--sub);padding:20px;font-size:12px;}
+
+/* ===== Responsive ===== */
+@media(max-width:768px){
+  :root{--nav-w:0;}
+  .sidebar{position:fixed;height:100%;transform:translateX(-100%);width:260px;}
+  .sidebar.open{transform:translateX(0);--nav-w:260px;}
+  .sidebar-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:25;display:none;}
+  .sidebar-backdrop.show{display:block;}
+  .mobile-nav-toggle{position:fixed;left:12px;top:12px;z-index:35;width:36px;height:36px;border-radius:50%;border:1px solid var(--gray);background:var(--card);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:var(--shadow);}
+  .module-header{padding-left:52px;}
+}
+@media(min-width:769px){
+  .mobile-nav-toggle{display:none;}
+  .sidebar-backdrop{display:none!important;}
+}
+</style>
+</head>
+<body>
+
+<!-- ====== Sidebar Navigation ====== -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-brand">
+    <div class="logo">📋</div>
+    <span>个人管理</span>
+  </div>
+  <nav class="nav-items">
+    <div class="nav-item" data-module="finance" onclick="switchModule('finance')">
+      <span>🍜</span><span>记一笔账</span><span class="badge zero" id="badge-finance">0</span>
+    </div>
+    <div class="nav-item" data-module="habit" onclick="switchModule('habit')">
+      <span>✅</span><span>习惯打卡</span><span class="badge zero" id="badge-habit">0</span>
+    </div>
+    <div class="nav-item" data-module="reading" onclick="switchModule('reading')">
+      <span>📖</span><span>阅读记录</span><span class="badge zero" id="badge-reading">0</span>
+    </div>
+    <div class="nav-item" data-module="diary" onclick="switchModule('diary')">
+      <span>📝</span><span>写日记</span><span class="badge zero" id="badge-diary">0</span>
+    </div>
+    <div class="nav-item" data-module="schedule" onclick="switchModule('schedule')">
+      <span>📅</span><span>日程安排</span><span class="badge zero" id="badge-schedule">0</span>
+    </div>
+  </nav>
+  <div class="sidebar-bottom">
+    <div class="nav-item" onclick="openMemory()" style="font-size:13px;">🧠 记忆库</div>
+    <div class="nav-item" onclick="openSettings()" style="font-size:13px;">⚙️ 设置</div>
+    <span id="connStatus" style="font-size:11px;color:var(--sub);padding:4px 14px;">检测中...</span>
+  </div>
+</aside>
+
+<div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeSidebar()"></div>
+
+<button class="mobile-nav-toggle" id="mobileNavToggle" onclick="toggleSidebar()" style="display:none;">☰</button>
+
+<!-- ====== Main Panel ====== -->
+<div class="main-panel">
+
+  <!-- ===== Finance View ===== -->
+  <div class="module-view" id="view-finance">
+    <div class="module-header">🍜 记一笔账</div>
+    <div class="input-area">
+      <div class="input-row">
+        <textarea id="financeInput" rows="1" placeholder="语音或文本输入，例如：花了35元买午餐外卖" onkeydown="handleModuleKey(event,'finance')"></textarea>
+        <button class="voice-btn" data-module="finance" id="voiceBtn-finance" onclick="toggleModuleVoice('finance')" title="语音输入">🎤</button>
+        <button class="btn-icon btn-clear" onclick="clearModuleInput('finance')" title="一键清除">✕</button>
+        <button class="btn-icon btn-send" id="sendBtn-finance" onclick="processModuleInput('finance')" title="解析">↑</button>
+      </div>
+      <div class="input-hint">💡 直接说"花了X元XX"，自动识别金额和分类；或点击下方手动填写</div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center;">
+        <input type="text" id="financeAmount" placeholder="金额" style="width:80px;padding:6px 10px;border:1px solid var(--gray);border-radius:8px;font-size:13px;outline:none;" oninput="financeManualChange()">
+        <input type="text" id="financeItem" placeholder="款项" style="width:120px;padding:6px 10px;border:1px solid var(--gray);border-radius:8px;font-size:13px;outline:none;" oninput="financeManualChange()">
+        <select id="financeCat" style="padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;outline:none;" onchange="financeManualChange()">
+          <option>食</option><option>住</option><option>行</option><option>工资收入</option><option>人情社交</option><option>学习锻炼</option><option>休闲娱乐</option><option>医疗保险</option><option>外表投资</option><option>兴趣</option><option>生活</option><option>其他</option>
+        </select>
+        <input type="text" id="financeDate" placeholder="日期" style="width:100px;padding:6px 10px;border:1px solid var(--gray);border-radius:8px;font-size:13px;outline:none;" oninput="financeManualChange()">
+        <button onclick="addFinanceManual()" id="financeManualBtn" disabled style="padding:6px 14px;border-radius:8px;border:none;background:var(--blue);color:#fff;font-size:13px;cursor:pointer;">确认</button>
+      </div>
+      <!-- 临时购物车 -->
+      <div class="cart-preview" id="cartPreview">
+        <h4>🛒 临时购物车 <span style="color:var(--sub);font-weight:400;" id="cartCount"></span></h4>
+        <div id="cartItems"></div>
+        <div class="cart-total" id="cartTotal" style="display:none;">合计：<span></span></div>
+        <div class="cart-actions">
+          <button class="btn-cart-clear" onclick="clearCart()">清空</button>
+          <button class="btn-cart-save" onclick="saveCartToFinance()">💾 全部保存</button>
+        </div>
+      </div>
+    </div>
+    <div class="records-scroll" id="financeRecords"><div class="records-empty"><div class="empty-icon">💰</div>暂无记录，开始记账吧</div></div>
+    <div class="module-sync-row" id="syncRow-finance">
+      <div><span class="sync-info">未同步 <strong id="modSyncCount-finance">0</strong> 条</span></div>
+      <button class="btn-mod-sync" id="modSyncBtn-finance" onclick="syncSingleModule('finance')" disabled>立即同步</button>
+    </div>
+  </div>
+
+  <!-- ===== Habit View ===== -->
+  <div class="module-view" id="view-habit">
+    <div class="module-header">✅ 习惯打卡</div>
+    <div class="input-area">
+      <div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;">
+        <label style="font-size:13px;font-weight:600;">日期：</label>
+        <input type="date" id="habitDate" style="padding:6px 10px;border:1px solid var(--gray);border-radius:8px;font-size:13px;outline:none;" onchange="refreshHabitGrid()">
+      </div>
+      <div class="habit-grid" id="habitGrid">
+        <!-- Generated dynamically -->
+      </div>
+    </div>
+    <div class="records-scroll" id="habitRecords"><div class="records-empty"><div class="empty-icon">✅</div>暂无打卡记录</div></div>
+    <div class="module-sync-row" id="syncRow-habit">
+      <div><span class="sync-info">未同步 <strong id="modSyncCount-habit">0</strong> 条</span></div>
+      <button class="btn-mod-sync" id="modSyncBtn-habit" onclick="syncSingleModule('habit')" disabled>立即同步</button>
+    </div>
+  </div>
+
+  <!-- ===== Reading View ===== -->
+  <div class="module-view" id="view-reading">
+    <div class="module-header">📖 阅读记录</div>
+    <div class="input-area">
+      <div class="input-row">
+        <textarea id="readingInput" rows="1" placeholder="输入图书信息，例：《原子习惯》感悟：习惯很重要，进度50%..." onkeydown="handleModuleKey(event,'reading')"></textarea>
+        <button class="voice-btn" data-module="reading" id="voiceBtn-reading" onclick="toggleModuleVoice('reading')" title="语音输入">🎤</button>
+        <button class="btn-icon btn-clear" onclick="clearModuleInput('reading')" title="一键清除">✕</button>
+        <button class="btn-icon btn-send" id="sendBtn-reading" onclick="processModuleInput('reading')" title="解析">↑</button>
+      </div>
+      <div class="input-hint">💡 输入后自动解析书名、感悟、进度，可手动调整（无需二次输入）</div>
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <input type="text" id="readingTitle" placeholder="书名（解析后自动填入）" style="min-width:140px;flex:1;padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;">
+        <select id="readingMethod" style="padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;" onchange="readingPreviewRefresh()">
+          <option value="">阅读方式</option><option>纸质书</option><option>电子书</option>
+        </select>
+        <select id="readingProgress" style="padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;" onchange="readingPreviewRefresh()">
+          <option>在读</option><option>读完</option><option>未读</option>
+        </select>
+        <input type="date" id="readingDate" style="padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;" onchange="readingPreviewRefresh()">
+        <input type="text" id="readingNote" placeholder="阅读感悟" style="width:120px;padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;">
+        <input type="number" id="readingWordCount" placeholder="字数(可选)" style="width:80px;padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;min:0;">
+        <input type="text" id="readingQuestion" placeholder="阅读提问(可选)" style="width:130px;padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;">
+        <div class="cat-row" id="readingCatRow"><!-- generated --></div>
+        <button onclick="addReadingManual()" id="readingManualBtn" style="padding:6px 14px;border-radius:8px;border:none;background:var(--blue);color:#fff;font-size:13px;cursor:pointer;">确认</button>
+      </div>
+      <div id="readingPreview" style="margin-top:8px;"></div>
+    </div>
+    <div class="records-scroll" id="readingRecords"><div class="records-empty"><div class="empty-icon">📚</div>暂无阅读记录</div></div>
+    <div class="module-sync-row" id="syncRow-reading">
+      <div><span class="sync-info">未同步 <strong id="modSyncCount-reading">0</strong> 条</span></div>
+      <button class="btn-mod-sync" id="modSyncBtn-reading" onclick="syncSingleModule('reading')" disabled>立即同步</button>
+    </div>
+  </div>
+
+  <!-- ===== Diary View ===== -->
+  <div class="module-view" id="view-diary">
+    <div class="module-header">📝 写日记</div>
+    <div class="input-area">
+      <div class="input-row">
+        <textarea id="diaryInput" rows="1" placeholder="说几句今天的感受..." onkeydown="handleModuleKey(event,'diary')"></textarea>
+        <button class="voice-btn" data-module="diary" id="voiceBtn-diary" onclick="toggleModuleVoice('diary')" title="语音输入">🎤</button>
+        <button class="btn-icon btn-clear" onclick="clearModuleInput('diary')" title="一键清除">✕</button>
+        <button class="btn-icon btn-send" id="sendBtn-diary" onclick="processModuleInput('diary')" title="解析">↑</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center;">
+        <input type="date" id="diaryDate" style="padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;">
+        <select id="diaryEnergy" style="padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;">
+          <option>3星</option><option>1星</option><option>2星</option><option>4星</option><option>5星</option>
+        </select>
+        <input type="text" id="diaryMood" placeholder="今日情绪" style="width:100px;padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;">
+        <input type="text" id="diaryGain" placeholder="今日收获" style="width:100px;padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;">
+        <input type="text" id="diaryReview" placeholder="关键复盘" style="width:100px;padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;">
+        <input type="text" id="diaryOne" placeholder="一句话" style="width:120px;padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;">
+        <button onclick="addDiaryManual()" id="diaryManualBtn" disabled style="padding:6px 14px;border-radius:8px;border:none;background:var(--blue);color:#fff;font-size:13px;cursor:pointer;">确认</button>
+      </div>
+    </div>
+    <div class="records-scroll" id="diaryRecords"><div class="records-empty"><div class="empty-icon">📔</div>暂无日记</div></div>
+    <div class="module-sync-row" id="syncRow-diary">
+      <div><span class="sync-info">未同步 <strong id="modSyncCount-diary">0</strong> 条</span></div>
+      <button class="btn-mod-sync" id="modSyncBtn-diary" onclick="syncSingleModule('diary')" disabled>立即同步</button>
+    </div>
+  </div>
+
+  <!-- ===== Schedule View ===== -->
+  <div class="module-view" id="view-schedule">
+    <div class="module-header">📅 日程安排</div>
+    <div class="input-area">
+      <div class="input-row">
+        <textarea id="scheduleInput" rows="1" placeholder="例如：下午3点开会讨论Q3计划" onkeydown="handleModuleKey(event,'schedule')"></textarea>
+        <button class="voice-btn" data-module="schedule" id="voiceBtn-schedule" onclick="toggleModuleVoice('schedule')" title="语音输入">🎤</button>
+        <button class="btn-icon btn-clear" onclick="clearModuleInput('schedule')" title="一键清除">✕</button>
+        <button class="btn-icon btn-send" id="sendBtn-schedule" onclick="processModuleInput('schedule')" title="解析">↑</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center;">
+        <input type="text" id="scheduleTitle" placeholder="日程标题" style="width:150px;padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;">
+        <input type="datetime-local" id="scheduleStart" style="padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;">
+        <input type="datetime-local" id="scheduleEnd" style="padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;">
+        <input type="text" id="scheduleNote" placeholder="备注" style="width:100px;padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;">
+        <button onclick="addScheduleManual()" id="scheduleManualBtn" disabled style="padding:6px 14px;border-radius:8px;border:none;background:var(--blue);color:#fff;font-size:13px;cursor:pointer;">确认</button>
+      </div>
+    </div>
+    <div class="records-scroll" id="scheduleRecords"><div class="records-empty"><div class="empty-icon">📅</div>暂无日程</div></div>
+    <div class="module-sync-row" id="syncRow-schedule">
+      <div><span class="sync-info">未同步 <strong id="modSyncCount-schedule">0</strong> 条</span></div>
+      <button class="btn-mod-sync" id="modSyncBtn-schedule" onclick="syncSingleModule('schedule')" disabled>立即同步</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- ====== Settings Modal ====== -->
+<div class="modal-overlay hidden" id="settingsModal">
+  <div class="modal" style="max-height:90vh;overflow-y:auto;">
+    <h2>⚙️ 应用配置</h2>
+
+    <h3 style="font-size:14px;margin:18px 0 8px;color:var(--sub);">🤖 AI 模型配置（用于智能解析输入内容）</h3>
+    <label>启用 AI 解析</label>
+    <select id="cfgAiEnabled" style="margin-bottom:8px;">
+      <option value="0">关闭（使用本地规则解析）</option>
+      <option value="1">开启（优先使用 AI 解析）</option>
+    </select>
+    <label>API Base URL</label>
+    <input type="text" id="cfgAiBaseUrl" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1">
+    <label>API Key</label>
+    <input type="password" id="cfgAiKey" placeholder="sk-...">
+    <label>模型名称</label>
+    <input type="text" id="cfgAiModel" placeholder="qwen-3.7">
+
+    <h3 style="font-size:14px;margin:18px 0 8px;color:var(--sub);">📋 飞书配置</h3>
+    <label>飞书 App ID <span style="color:var(--red)">*</span></label>
+    <input type="text" id="cfgAppId" placeholder="cli_xxxxxxxxxxxxxxxx">
+    <label>飞书 App Secret <span style="color:var(--red)">*</span></label>
+    <input type="password" id="cfgAppSecret" placeholder="••••••••">
+    <label>Base Token <span style="color:var(--red)">*</span></label>
+    <input type="text" id="cfgBaseToken" placeholder="BqQUbqWIxapS7DsuMNocctOgncc">
+
+    <details style="margin-top:14px">
+      <summary style="font-size:12px;color:var(--sub);cursor:pointer">表 ID 配置（可选，默认已配置）</summary>
+      <label>账单 Table ID</label><input type="text" id="cfgTableBill">
+      <label>习惯打卡 Table ID</label><input type="text" id="cfgTableHabit">
+      <label>阅读记录 Table ID</label><input type="text" id="cfgTableRead">
+      <label>日记 Table ID</label><input type="text" id="cfgTableDiary">
+      <label>日程安排 Table ID</label><input type="text" id="cfgTableDay">
+    </details>
+
+    <h3 style="font-size:14px;margin:18px 0 8px;color:var(--sub);">💾 数据备份</h3>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <button class="btn-secondary" onclick="exportData()" style="font-size:12px;padding:6px 12px;">⬇️ 导出数据</button>
+      <button class="btn-secondary" onclick="document.getElementById('importFile').click()" style="font-size:12px;padding:6px 12px;">⬆️ 导入数据</button>
+      <input type="file" id="importFile" style="display:none;" accept=".json" onchange="importData(this)">
+    </div>
+    <div id="storageHealth" style="font-size:11px;color:var(--sub);padding:4px 0;"></div>
+
+    <div class="actions">
+      <button class="btn-secondary" onclick="closeSettings()">取消</button>
+      <button class="btn-primary" onclick="saveSettings()">保存配置</button>
+    </div>
+  </div>
+</div>
+
+<!-- ====== Memory Sidebar (right side, simpler) ====== -->
+<div class="modal-overlay hidden" id="memoryModal">
+  <div class="modal" style="width:min(90vw,500px)">
+    <h2>🧠 记忆库</h2>
+    <div style="margin-bottom:12px;display:flex;gap:8px;">
+      <button onclick="clearMemory()" class="btn-secondary" style="font-size:12px;padding:6px 12px;">🗑️ 清空记忆</button>
+    </div>
+    <div id="memoryContent" style="max-height:60vh;overflow-y:auto;font-size:13px;">
+      <div style="text-align:center;color:var(--sub);padding:20px;">暂无记忆记录</div>
+    </div>
+    <div class="actions">
+      <button class="btn-secondary" onclick="closeMemory()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ====== Toast ====== -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+/* ===================================================================
+ *   CONFIG (no hardcoded credentials)
+ * =================================================================== */
+const STORAGE_KEY = 'pms_config_v2';
+const DEFAULT_TABLES = {
+  bill: 'tbl2ufU3dhk9QLAL',
+  habit: 'tbl0cu5240UQfD2g',
+  read: 'tblvVJaZB6nyDZhY',
+  diary: 'tbloxRJIDi4pMIlo',
+  day: 'tblMLQ7ANHmAHJy2'
+};
+
+async function loadConfig() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  // Fallback to IndexedDB if localStorage is empty
+  try {
+    const fromDB = await DBBackup.getConfig('main');
+    if (fromDB) return fromDB;
+  } catch {}
+  return { appId: '', appSecret: '', baseToken: '', tables: { ...DEFAULT_TABLES } };
+}
+function saveConfigObj(c) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(c));
+  DBBackup.setConfig('main', c);
+}
+
+let cfg = { appId: '', appSecret: '', baseToken: '', tables: { ...DEFAULT_TABLES } };
+function hasCredentials() { return !!(cfg.appId && cfg.appSecret && cfg.baseToken); }
+
+// Auto-migrate old table IDs to new Base (2026-08-02)
+function migrateConfig() {
+  const MIGRATED_KEY = 'pms_migrated_v3';
+  if (localStorage.getItem(MIGRATED_KEY)) return;
+  const OLD = ['tblXNMDVTkXVOEct', 'tbl2GVQ7Lm2kwiUA', 'tblKtzWcTdGvWT9L', 'tblXPqf29nKH5vaX', 'tblLtC4Jtav7GTW8'];
+  const KEYS = ['bill', 'habit', 'read', 'diary', 'day'];
+  let changed = false;
+  KEYS.forEach((k, i) => {
+    if (cfg.tables && cfg.tables[k] === OLD[i]) { cfg.tables[k] = DEFAULT_TABLES[k]; changed = true; }
+  });
+  if (changed) { saveConfigObj(cfg); console.log('[Migration] 表 ID 已更新为新 Base'); }
+  localStorage.setItem(MIGRATED_KEY, '1');
+}
+
+/* ===================================================================
+ *   UUID GENERATOR
+ * =================================================================== */
+function genUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
+/* ===================================================================
+ *   LOCAL RULES ENGINE — self-learning regex rule base
+ * =================================================================== */
+const LocalRules = {
+  _key: 'pms_local_rules_v1',
+  _rules: [],
+
+  // Load rules from storage
+  init() {
+    try {
+      const raw = localStorage.getItem(this._key);
+      this._rules = raw ? JSON.parse(raw) : [];
+    } catch { this._rules = []; }
+    console.log(`[LocalRules] Loaded ${this._rules.length} rules`);
+    Debug.log(`已加载 ${this._rules.length} 条本地规则`, 'rule');
+  },
+
+  _save() {
+    try { localStorage.setItem(this._key, JSON.stringify(this._rules)); } catch {}
+  },
+
+  // Try to match input against all local rules; returns parsed result or null
+  match(text) {
+    if (!text) return null;
+    const t = text.trim();
+    for (const rule of this._rules) {
+      try {
+        const re = new RegExp(rule.pattern, 'i');
+        const m = t.match(re);
+        if (m) {
+          rule.hitCount = (rule.hitCount || 0) + 1;
+          this._save();
+          Debug.log(`本地规则命中: /${rule.pattern}/ → ${rule.category}`, 'ok');
+          // Build result from rule's action
+          const result = { module: rule.module, _source: 'local_rule' };
+          if (rule.action) {
+            Object.assign(result, this._executeAction(m, rule.action, t));
+          }
+          return result;
+        }
+      } catch (e) { /* skip invalid regex */ }
+    }
+    return null;
+  },
+
+  _executeAction(match, action, rawText) {
+    const result = {};
+    const groups = match.slice(1); // Capturing groups
+    for (const [key, template] of Object.entries(action)) {
+      if (template === '__group_1__') result[key] = groups[0] || '';
+      else if (template === '__group_2__') result[key] = groups[1] || '';
+      else if (template === '__group_3__') result[key] = groups[2] || '';
+      else if (typeof template === 'string' && template.startsWith('__literal__')) result[key] = template.replace('__literal__', '');
+      else result[key] = template;
+    }
+    return result;
+  },
+
+  // Learn a new rule from confirmed AI result
+  learn(text, result) {
+    if (!text || !result || !result.module) return;
+    
+    // Auto-generate regex from natural language
+    const pattern = this._generatePattern(text, result);
+    if (!pattern) return;
+
+    // Check for duplicates
+    const exists = this._rules.some(r => r.pattern === pattern && r.module === result.module);
+    if (exists) {
+      Debug.log(`规则已存在，跳过: /${pattern}/`, 'info');
+      return;
+    }
+
+    const rule = {
+      id: genUUID(),
+      pattern,
+      module: result.module,
+      category: result.分类 || result.类目 || result.module,
+      action: this._generateAction(result),
+      hitCount: 0,
+      createdAt: new Date().toISOString()
+    };
+
+    this._rules.push(rule);
+    // Cap at 200 rules
+    if (this._rules.length > 200) this._rules = this._rules.slice(-200);
+    this._save();
+    console.log(`[LocalRules] Learned new rule: /${pattern}/ → ${result.module}`);
+    Debug.log(`新规则已学习: /${pattern}/ → ${result.module}`, 'rule');
+    showToast('📐 已学习新规则，下次可本地秒识别', 'success', 2000);
+  },
+
+  // Generate regex from text + result
+  _generatePattern(text, result) {
+    // Extract key entities from result and replace in text
+    const entities = [];
+    if (result.款项) entities.push(result.款项);
+    if (result.书名) entities.push(result.书名);
+    if (result.记录标题) entities.push(result.记录标题);
+
+    let patternSrc = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // Replace known entities with capture groups
+    for (const entity of entities) {
+      if (entity && patternSrc.includes(entity.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))) {
+        // Already escaped above, so entity is already escaped in patternSrc
+        patternSrc = patternSrc.replace(entity.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), '(.+?)');
+      }
+    }
+
+    // Add amount matching for finance
+    if (result.module === 'finance' && result.流水) {
+      patternSrc += '.*?(\\d+)';
+    }
+
+    return patternSrc;
+  },
+
+  _generateAction(result) {
+    const action = {};
+    if (result.款项) action['款项'] = '__group_1__';
+    if (result.书名) action['书名'] = '__group_1__';
+    if (result.记录标题) action['记录标题'] = '__group_1__';
+    if (result.流水) action['流水'] = '__group_2__';
+    return action;
+  },
+
+  getAll() {
+    return this._rules;
+  },
+
+  clear() {
+    this._rules = [];
+    this._save();
+    Debug.log('所有本地规则已清空', 'warn');
+  }
+};
+
+/* ===================================================================
+ *   INDEXEDDB BACKUP — redundant storage for persistence
+ * =================================================================== */
+const DBBackup = {
+  _db: null,
+  _ready: false,
+  async init() {
+    if (this._ready) return;
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open('PMSBackup', 1);
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => { this._db = req.result; this._ready = true; resolve(); };
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('config')) db.createObjectStore('config', { keyPath: 'key' });
+        if (!db.objectStoreNames.contains('data')) db.createObjectStore('data', { keyPath: 'module' });
+        if (!db.objectStoreNames.contains('memory')) db.createObjectStore('memory', { keyPath: 'id' });
+      };
+    });
+  },
+  async _tx(store, mode) {
+    if (!this._ready) await this.init();
+    return this._db.transaction(store, mode).objectStore(store);
+  },
+  async getConfig(key) {
+    try {
+      const s = await this._tx('config', 'readonly');
+      const r = await new Promise((res, rej) => { const q = s.get(key); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+      return r ? r.value : null;
+    } catch (e) { return null; }
+  },
+  async setConfig(key, value) {
+    try { const s = await this._tx('config', 'readwrite'); s.put({ key, value }); } catch (e) {}
+  },
+  async getData(module) {
+    try {
+      const s = await this._tx('data', 'readonly');
+      const r = await new Promise((res, rej) => { const q = s.get(module); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+      return r ? r.records : null;
+    } catch (e) { return null; }
+  },
+  async setData(module, records) {
+    try { const s = await this._tx('data', 'readwrite'); s.put({ module, records }); } catch (e) {}
+  },
+  async getMemory() {
+    try {
+      const s = await this._tx('memory', 'readonly');
+      const r = await new Promise((res, rej) => { const q = s.get('all'); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+      return r ? r.entries : null;
+    } catch (e) { return null; }
+  },
+  async setMemory(entries) {
+    try { const s = await this._tx('memory', 'readwrite'); s.put({ id: 'all', entries }); } catch (e) {}
+  },
+  async exportAll() {
+    const result = { config: {}, data: {}, memory: [], exportedAt: new Date().toISOString(), version: 2 };
+    try {
+      const cfgStore = await this._tx('config', 'readonly');
+      const cfgEntries = await new Promise((res, rej) => { const q = cfgStore.getAll(); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+      cfgEntries.forEach(e => { result.config[e.key] = e.value; });
+    } catch (e) {}
+    for (const m of ['finance', 'habit', 'reading', 'diary', 'schedule']) {
+      const recs = await this.getData(m);
+      if (recs) result.data[m] = recs;
+    }
+    const mem = await this.getMemory();
+    if (mem) result.memory = mem;
+    return result;
+  },
+  async importAll(payload) {
+    if (payload.config) {
+      for (const [k, v] of Object.entries(payload.config)) {
+        await this.setConfig(k, v);
+      }
+    }
+    if (payload.data) {
+      for (const [m, recs] of Object.entries(payload.data)) {
+        await this.setData(m, recs);
+      }
+    }
+    if (payload.memory) {
+      await this.setMemory(payload.memory);
+    }
+  }
+};
+
+/* ===================================================================
+ *   DATA MANAGER — local-first, sync-status tracked
+ * =================================================================== */
+const DataManager = {
+  _key(m) { return 'pms_data_' + m; },
+  _load(m) {
+    try {
+      const raw = localStorage.getItem(this._key(m));
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return [];
+  },
+  _save(m, d) {
+    localStorage.setItem(this._key(m), JSON.stringify(d));
+    DBBackup.setData(m, d);
+  },
+  async restoreFromDB(module) {
+    const fromDB = await DBBackup.getData(module);
+    if (fromDB && fromDB.length > 0) {
+      const current = this._load(module);
+      if (current.length === 0) {
+        localStorage.setItem(this._key(module), JSON.stringify(fromDB));
+        return true;
+      }
+    }
+    return false;
+  },
+
+  add(module, data) {
+    const recs = this._load(module);
+    const rec = { id: genUUID(), syncStatus: 'pending', syncId: null, data, timestamp: Date.now() };
+    recs.push(rec);
+    this._save(module, recs);
+    return rec;
+  },
+
+  getAll(module) { return this._load(module); },
+
+  getPending(module) {
+    return this._load(module).filter(r => r.syncStatus === 'pending');
+  },
+
+  markAsSynced(module, localId, feishuRecordId) {
+    const recs = this._load(module);
+    const idx = recs.findIndex(r => r.id === localId);
+    if (idx === -1) return false;
+    recs[idx].syncStatus = 'synced';
+    recs[idx].syncId = feishuRecordId;
+    this._save(module, recs);
+    return true;
+  },
+
+  update(module, localId, newData) {
+    const recs = this._load(module);
+    const idx = recs.findIndex(r => r.id === localId);
+    if (idx === -1) return false;
+    recs[idx].data = { ...recs[idx].data, ...newData };
+    recs[idx].syncStatus = 'pending';
+    recs[idx].syncId = null;
+    this._save(module, recs);
+    return true;
+  },
+
+  remove(module, localId) {
+    const recs = this._load(module);
+    const filtered = recs.filter(r => r.id !== localId);
+    if (filtered.length === recs.length) return false;
+    this._save(module, filtered);
+    return true;
+  }
+};
+
+/* ===================================================================
+ *   FEISHU API CLIENT
+ * =================================================================== */
+const FeishuAPI = {
+  // Use /api proxy when running on our local server (port 3000),
+  // otherwise use direct URL (may have CORS issues)
+  get _baseUrl() {
+    return (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+      ? '/api' : 'https://open.feishu.cn/open-apis';
+  },
+  _token: null, _tokenExpires: 0,
+
+  async getToken() {
+    if (this._token && Date.now() < this._tokenExpires) return this._token;
+    if (!hasCredentials()) throw new Error('请先配置飞书 App ID 和 App Secret');
+    // Detect file:// protocol (CORS blocked)
+    if (location.protocol === 'file:') {
+      throw new Error('当前通过 file:// 协议打开，浏览器禁止访问网络。请使用本地服务器访问（如 http://localhost:9527）');
+    }
+    try {
+      const resp = await fetch(`${this._baseUrl}/auth/v3/tenant_access_token/internal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+        body: JSON.stringify({ app_id: cfg.appId, app_secret: cfg.appSecret })
+      });
+      const json = await resp.json();
+      if (json.code !== 0) {
+        let hint = '';
+        if (json.code === 10003) hint = '（AppID 不存在，请检查应用是否在飞书开发者后台创建）';
+        else if (json.code === 10014) hint = '（AppSecret 错误，请从飞书开发者后台复制正确的秘钥）';
+        else if (json.code === 91024) hint = '（应用未发布或未启用，请在飞书开发者后台「版本管理与发布」中创建并发布版本）';
+        throw new Error(`获取Token失败: ${json.msg} (${json.code}) ${hint}`);
+      }
+      this._token = json.tenant_access_token;
+      this._tokenExpires = Date.now() + (json.expire - 300) * 1000;
+      return this._token;
+    } catch (e) {
+      if (e.name === 'TypeError' || e.message === 'Failed to fetch') {
+        if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+          throw new Error('代理服务器未启动，请运行 node server.js 并通过 http://localhost:3000 访问');
+        }
+        throw new Error('网络连接失败，请通过 http://localhost:3000 访问（需要运行 node server.js）');
+      }
+      throw e;
+    }
+  },
+
+  async _call(method, path, body) {
+    const token = await this.getToken();
+    const opts = { method, headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json; charset=UTF-8' } };
+    if (body) opts.body = JSON.stringify(body);
+    const resp = await fetch(`${this._baseUrl}${path}`, opts);
+    const json = await resp.json();
+    if (json.code !== 0) throw new Error(`API错误[${json.code}]: ${json.msg}`);
+    return json.data;
+  },
+
+  async createRecord(tableId, fields) { return this._call('POST', `/bitable/v1/apps/${cfg.baseToken}/tables/${tableId}/records`, { fields }); },
+  async listRecords(tableId, params) { const qs = new URLSearchParams(params || {}).toString(); return this._call('GET', `/bitable/v1/apps/${cfg.baseToken}/tables/${tableId}/records${qs ? '?' + qs : ''}`); },
+  async updateRecord(tableId, recordId, fields) { return this._call('PUT', `/bitable/v1/apps/${cfg.baseToken}/tables/${tableId}/records/${recordId}`, { fields }); },
+  async deleteRecord(tableId, recordId) { return this._call('DELETE', `/bitable/v1/apps/${cfg.baseToken}/tables/${tableId}/records/${recordId}`); }
+};
+
+/* ===================================================================
+ *   SYNC MANAGER — batch sync with dedup
+ * =================================================================== */
+const SyncManager = {
+  _modToTable: { finance: 'bill', habit: 'habit', reading: 'read', diary: 'diary', schedule: 'day' },
+
+  getTableId(module) { return cfg.tables[this._modToTable[module]]; },
+
+  async syncModule(moduleName) {
+    const tableId = this.getTableId(moduleName);
+    if (!tableId) { showToast('数据表ID未配置', 'error'); return { success: 0, fail: 0, total: 0 }; }
+
+    // Step 1: Get pending
+    const pending = DataManager.getPending(moduleName);
+    // Step 2: Empty check
+    if (pending.length === 0) { showToast('暂无新数据需要同步', 'info'); return { success: 0, fail: 0, total: 0 }; }
+
+    // Step 3: Dedup — check feishu for existing Local_IDs
+    const pendingIds = new Set(pending.map(r => r.id));
+    const existingIds = new Set();
+    try {
+      const resp = await FeishuAPI.listRecords(tableId, { page_size: 500 });
+      const items = resp.items || [];
+      for (const item of items) {
+        const lid = item.fields['Local_ID'];
+        if (lid && pendingIds.has(lid)) {
+          existingIds.add(lid);
+          DataManager.markAsSynced(moduleName, lid, item.record_id);
+        }
+      }
+    } catch (e) { console.warn('Dedup check failed:', e.message); }
+
+    // Step 4: Filter
+    const newRecords = pending.filter(r => !existingIds.has(r.id));
+    if (newRecords.length === 0) {
+      showToast(`所有 ${pending.length} 条记录已同步，无需重复提交`, 'info');
+      this.updateAllUI();
+      return { success: 0, fail: 0, total: 0, deduped: pending.length };
+    }
+
+    // Step 5-6: Upload one by one
+    let success = 0, fail = 0;
+    for (const rec of newRecords) {
+      try {
+        const fields = this._convertFields(moduleName, rec.data);
+        fields['Local_ID'] = rec.id;
+        const result = await FeishuAPI.createRecord(tableId, fields);
+        if (result && result.record) {
+          DataManager.markAsSynced(moduleName, rec.id, result.record.record_id);
+          success++;
+        }
+      } catch (e) {
+        fail++;
+        const errMsg = e.data?.msg || e.data?.message || e.message || JSON.stringify(e);
+        console.error(`Sync failed [module=${moduleName}, id=${rec.id}]:`, e);
+        alert(`同步失败: ${errMsg}\n\n记录ID: ${rec.id}`);
+      }
+    }
+
+    // Step 7: Report
+    const isError = fail > 0;
+    showToast(`同步完成：${success} 条成功${fail > 0 ? '，' + fail + ' 条失败' : ''}`, isError ? 'error' : 'success');
+    this.updateAllUI();
+    return { success, fail, total: newRecords.length };
+  },
+
+  _dateToTs(s) {
+    if (!s) return null;
+    if (typeof s === 'number') return s;
+    const m = s.match(/(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})[T\s]?(\d{1,2})?:?(\d{1,2})?/);
+    if (m) return new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]), parseInt(m[4] || '0'), parseInt(m[5] || '0')).getTime();
+    return null;
+  },
+
+  _convertFields(module, data) {
+    const f = { ...data };
+    // Habit: convert 'habits' array → individual boolean fields
+    if (module === 'habit' && Array.isArray(f.habits)) {
+      const allHabits = ['睡眠', '饮食', '运动', '阅读', '输出', '语言', '技能', '计划', '情绪', '冥想'];
+      const selected = f.habits;
+      delete f.habits;
+      allHabits.forEach(h => { f[h] = selected.includes(h); });
+    }
+    // Date conversion
+    if (f.日期 && typeof f.日期 === 'string') f.日期 = this._dateToTs(f.日期);
+    if (f.开始日期 && typeof f.开始日期 === 'string') f.开始日期 = this._dateToTs(f.开始日期);
+    if (f.结束日期 && typeof f.结束日期 === 'string') f.结束日期 = this._dateToTs(f.结束日期);
+    ['DDL', '开始日期', '结束日期'].forEach(k => { if (f[k] === '' || f[k] === null || f[k] === undefined) delete f[k]; });
+    // Remove Local_ID if it accidentally remains in data
+    delete f.Local_ID;
+    return f;
+  },
+
+  updateAllUI() {
+    ['finance', 'habit', 'reading', 'diary', 'schedule'].forEach(m => {
+      this.updateModuleUI(m);
+    });
+  },
+
+  updateModuleUI(module) {
+    const pending = DataManager.getPending(module);
+    const count = pending.length;
+    // Badge
+    const badge = document.getElementById('badge-' + module);
+    if (badge) { badge.textContent = count; badge.className = 'badge' + (count === 0 ? ' zero' : ''); }
+    // Per-module sync row
+    const row = document.getElementById('syncRow-' + module);
+    const countEl = document.getElementById('modSyncCount-' + module);
+    const btn = document.getElementById('modSyncBtn-' + module);
+    if (countEl) countEl.textContent = count;
+    if (btn) btn.disabled = count === 0;
+    if (row) row.style.display = count > 0 ? 'flex' : 'none';
+    // Render records
+    renderModuleRecords(module);
+  }
+};
+
+/* ===================================================================
+ *   NLP ENGINE (project module removed)
+ * =================================================================== */
+const Engine = {
+  _today() { const d = new Date(); return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`; },
+  _tomorrow() { const d = new Date(Date.now()+86400000); return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`; },
+  _ymd(d) { return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`; },
+  _parseDate(s) {
+    if (/今天|今日/.test(s)) return this._today();
+    if (/明天|明日/.test(s)) return this._tomorrow();
+    if (/后天/.test(s)) { const d = new Date(Date.now()+172800000); return this._ymd(d); }
+    if (/昨天|昨日/.test(s)) { const d = new Date(Date.now()-86400000); return this._ymd(d); }
+    if (/前天/.test(s)) { const d = new Date(Date.now()-172800000); return this._ymd(d); }
+    const m = s.match(/(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/); if (m) return `${m[1]}/${m[2].padStart(2,'0')}/${m[3].padStart(2,'0')}`;
+    return this._today();
+  },
+  _normalizeCnNumbers(s) {
+    const map = { 零:0, 一:1, 二:2, 三:3, 四:4, 五:5, 六:6, 七:7, 八:8, 九:9, 十:10, 百:100, 千:1000, 万:10000 };
+    function convert(str) {
+      if (!str) return null;
+      if (str.length === 1 && map[str] !== undefined && map[str] < 10) return map[str];
+      let result = 0, tmp = 0;
+      for (let i = 0; i < str.length; i++) {
+        const v = map[str[i]];
+        if (v === undefined) continue;
+        if (v >= 10) {
+          if (tmp === 0) tmp = 1;
+          result += tmp * v;
+          tmp = 0;
+        } else {
+          tmp = tmp * 10 + v;
+        }
+      }
+      result += tmp;
+      return result || null;
+    }
+    return s.replace(/([零一二三四五六七八九十百千万]+)(?=[元块个只份杯瓶])/g, (m) => {
+      const n = convert(m);
+      return n !== null ? String(n) : m;
+    });
+  },
+  _parseAmount(s) {
+    const ns = this._normalizeCnNumbers(s);
+    // 1) keyword + amount: 花了60元 / 买菜花了120块 / 工资5000
+    const m1 = ns.match(/(?:花了|支出|消费|用了|付了|付款|支付|收入|赚了|发了|工资|到账|报销|退款|花)[^\d]*?(\d+(?:\.\d{1,2})?)\s*(?:元|块|万)?/);
+    if (m1) { const v = parseFloat(m1[1]); return /万/.test(m1[0]) ? v * 10000 : v; }
+    // 2) amount + keyword: 30元买菜 / 30块钱
+    const m2 = ns.match(/(\d+(?:\.\d{1,2})?)\s*(?:元|块|块钱)(?:的|钱)?/);
+    if (m2) return parseFloat(m2[1]);
+    // 3) Fallback: any number followed by 元/块/￥
+    const m3 = ns.match(/(\d{1,8})\s*[元块￥]/);
+    if (m3) return parseFloat(m3[1]);
+    return null;
+  },
+  _classifyBill(item) {
+    const map = { 食: ['饭','餐','菜','外卖','零食','水果','饮料','奶茶','咖啡','面包','超市','食材','买菜','大米','油','盐'], 住: ['房租','水电','物业','网费','煤气','天然气','维修','装修','月供','房贷'], 行: ['打车','滴滴','地铁','公交','加油','停车','高铁','机票','火车','共享单车','骑行'], 工资收入: ['工资','薪资','奖金','提成','报销','兼职','外快','收入'], 人情社交: ['红包','礼物','聚餐','聚会','份子','请客','约会','社交'], 学习锻炼: ['书','课程','培训','考试','报名','健身房','运动','器材'], 休闲娱乐: ['游戏','电影','KTV','旅游','景点','门票','会员','视频','音乐','订阅'], 医疗保险: ['药','挂号','体检','医院','口罩','保险'], 外表投资: ['衣服','鞋子','包','化妆品','护肤','理发','美甲','香水'], 兴趣: ['相机','手办','模型','乐器','画材','手工'], 生活: ['日用品','纸巾','洗衣','快递','手机','充电','话费','电费'], 其他: [] };
+    const l = item.toLowerCase();
+    for (const [cat, kws] of Object.entries(map)) { if (kws.some(k => l.includes(k))) return cat; }
+    return '其他';
+  },
+  _classifyBookCat(title) {
+    const map = {
+      工具库: ['字典','词典','手册','指南','说明书','百科','汇编','菜谱','设计规范','法律','法规','条款','模板','速查','工具书'],
+      技术技能: ['编程','python','java','javascript','react','vue','算法','数据结构','考证','考试','教程','入门','实战','外语','英语','日语','写作','演讲','办公','excel','word','ppt','ps','ai','设计技能','职业技能'],
+      商业经济: ['经济','理财','投资','管理','营销','商业','创业','金融','市场','宏观','企业','财务','会计','股票','基金','商业模式','职场'],
+      认知思维: ['心理','哲学','逻辑','思维','认知','行为','习惯','效率','自控','意志','决策','脑科学','学习方法','沟通','谈判'],
+      历史社会: ['历史','政治','社会','文明','战争','朝代','国家','人类','地缘','文化','社会学','人类学','世界史','中国史','格局','民俗'],
+      自然科学: ['物理','生物','化学','数学','科学','宇宙','进化','基因','天文','地理','自然','科普','量子','相对论','生命科学'],
+      文学叙事: ['小说','散文','传记','诗歌','故事','文学','名著','随笔','剧本','童话','科幻','言情','悬疑']
+    };
+    const t = title.toLowerCase();
+    for (const [cat, kws] of Object.entries(map)) { if (kws.some(k => t.includes(k))) return cat; }
+    return '认知思维';
+  },
+  _extractEnergy(s) {
+    if (/5星|五星|非常棒|超级好|满分|太棒|极好/.test(s)) return '5星';
+    if (/4星|四星|很好|不错|挺好|开心/.test(s)) return '4星';
+    if (/3星|三星|还行|一般|普通|正常/.test(s)) return '3星';
+    if (/2星|二星|不太好|一般般|有点差/.test(s)) return '2星';
+    if (/1星|一星|很差|糟糕|难受|崩溃/.test(s)) return '1星';
+    return '3星';
+  },
+  _extractHabits(s) {
+    const h = ['睡眠','饮食','运动','阅读','输出','语言','技能','计划','情绪','冥想'];
+    return h.filter(x => s.includes(x));
+  },
+  parseFinance(text) {
+    const t = text.trim(); if (!t) return null;
+    const amt = this._parseAmount(t);
+    if (amt === null) return null;
+    const date = this._parseDate(t);
+    // Strip amount+unit (after Chinese number normalization), then strip action/date keywords
+    let item = this._normalizeCnNumbers(t)
+      .replace(/\d+(?:\.\d+)?\s*(?:元|块|万|块钱|￥)?/g, '')
+      .replace(/记账[：:]\s*|花了|支出|消费|账单|付款|付了|支付|收入|工资|赚了|买了|到账|报销|退款|的|钱/gi, '')
+      .replace(/今天|昨天|明天|前天|昨日|明日|刚刚|刚才/gi, '')
+      .replace(/^我/g, '')
+      .replace(/^(.?)[了过个]/g, '$1')
+      .replace(/(一|两)?(顿|份|杯|瓶|个|碗|盘|次|件|套|包|盒|箱)/g, '')
+      .replace(/[，。,.\s]+$/, '').trim();
+    // Collapse accidental empty/leftover fragments
+    if (!item || /^(了|的|买|用|花)$/.test(item)) item = '日常消费';
+    const cat = this._classifyBill(item);
+    const sign = /收入|工资|赚了|奖金|到账|提成|报销|退款/.test(t) ? 1 : -1;
+    return { 款项: item, 流水: sign * Math.abs(amt), 日期: date, 分类: cat, 备注: '' };
+  },
+  parseReading(text) {
+    const t = text.trim(); if (!t) return null;
+    // Extract book name: 《书名》 or plain text after stripping keywords
+    const bm = t.match(/《(.+?)》/);
+    let bn = bm ? bm[1] : t.replace(/读了|看了|在读|读完|开始读|阅读|读书|看书|书[：:]|准备读|想读|一本|这本|那本/g, '').replace(/\s+/g, ' ').trim();
+    if (!bn || bn.length < 2) return null;
+    // Split remaining text: if 《书名》 format, text after is 感悟/进度
+    let note = '';
+    if (bm) {
+      note = t.replace(bm[0], '').trim();
+    }
+    // Extract 感悟
+    const gainM = note.match(/感悟[：:]\s*(.+?)(?:[。，,\n]|$|进度|方式)/);
+    const gain = gainM ? gainM[1].trim() : '';
+    // Extract 进度 (percentage or keywords)
+    let progress = '在读';
+    const progM = note.match(/进度\s*[：:]*\s*(\d{1,3}%)/);
+    if (progM) progress = progM[1];
+    else if (/读完|已读|读完/.test(note)) progress = '已读';
+    else if (/在读|即将开读/.test(note)) progress = '在读';
+    else if (/想读|准备读|待读/.test(note)) progress = '想读';
+    // Extract 阅读方式
+    const methodM = note.match(/方式[：:]\s*(.+?)(?:[。，,\n]|$)/);
+    const method = methodM ? methodM[1].trim() : '';
+    return { 书名: bn, 类目: this._classifyBookCat(bn), 阅读方式: method, 进度: progress, 开始日期: this._today(), 感悟: gain };
+  },
+  parseDiary(text) {
+    const t = text.trim(); if (!t) return null;
+    const energy = this._extractEnergy(t);
+    const date = this._parseDate(t);
+    // Remove date expression from text to avoid polluting content fields
+    let body = t.replace(/(\d{4}[\/\-年])?(\d{1,2})[月\/](\d{1,2})[号日]?/, ' ')
+                .replace(/今天|今日|昨天|昨日|明天|明日|后天|前天/g, ' ')
+                .replace(/日记|感悟|心情|写日记|记日记|记录今天/g, ' ')
+                .trim();
+    // Helper: extract segment after a keyword until a stop keyword or punctuation
+    const stopWords = '今日情绪|情绪|今日收获|收获|关键复盘|复盘|总结|反思|一句话|感觉|感到|觉得|心情';
+    function extractAfter(kw, stops) {
+      const re = new RegExp(kw + '[：:\\s了到]*([^。，；！？\\n' + (stops ? '|' + stops : '') + ']+)', 'i');
+      const m = body.match(re);
+      return m ? m[1].trim() : '';
+    }
+    // Extract fields: explicit markers first, then fallback sentences
+    let 今日情绪 = extractAfter('(?:今日情绪|情绪)', '今日收获|收获|关键复盘|复盘|总结|反思|一句话');
+    let 今日收获 = extractAfter('(?:今日收获|收获)', '关键复盘|复盘|总结|反思|一句话|今日情绪|情绪');
+    let 关键复盘 = extractAfter('(?:关键复盘|复盘|总结|反思)', '今日情绪|情绪|今日收获|收获');
+    let 一句话 = '';
+    // Fallback: split sentences
+    const sentences = body.split(/[。，；！？\n]+/).map(s => s.trim()).filter(Boolean);
+    if (!今日情绪) {
+      const moodSent = sentences.find(s => /感觉|感到|觉得|心情|情绪/.test(s) || /悲伤|难过|开心|高兴|焦虑|兴奋|沮丧|失落|满足|平静|愤怒|烦躁|疲惫|舒服|不爽|惊喜|感动|欣慰|紧张|害怕|担忧|郁闷|愉快|轻松|压抑|痛苦|甜蜜|温暖|孤独|充实|空虚/.test(s));
+      if (moodSent) {
+        const m = moodSent.match(/(?:感觉|感到|觉得|心情|情绪)?[是\s]*([^，。]+)/);
+        今日情绪 = m ? m[1].trim() : moodSent;
+      }
+    }
+    if (!今日收获) {
+      const gainSent = sentences.find(s => /学习|学到|明白|理解|掌握|了解|认识|收获|得到|感悟|意识到|懂得/.test(s));
+      if (gainSent) {
+        今日收获 = gainSent;
+      }
+    }
+    if (!关键复盘) {
+      const reviewSent = sentences.find(s => /问题|不足|改进|下次|可以|需要|应该|反思|总结|复盘|尝试|调整|优化/.test(s));
+      关键复盘 = reviewSent || '';
+    }
+    if (!一句话) {
+      // If user wrote "用一句话来概括的话...", take the text after the marker phrase
+      const summaryM = body.match(/(?:用一句话来概括的话|一句话来概括|概括一下|总结一下|总的来说)[，。,\s]*(.+)/);
+      一句话 = summaryM ? summaryM[1].trim() : (sentences[sentences.length - 1] || sentences[0] || body || t);
+    }
+    // Clean empty-ish strings and common adverbs/particles
+    const clean = s => s.replace(/^(是|为|了|有|就|的|非常|很|有点|比较|\s)+/, '').trim();
+    return {
+      日期: date,
+      能量: energy,
+      一句话: clean(一句话) || body || t,
+      今日情绪: clean(今日情绪),
+      今日收获: clean(今日收获),
+      关键复盘: clean(关键复盘)
+    };
+  },
+  _normalizeCnTime(s) {
+    // Convert Chinese hour numbers before 点/时 so regex can match them
+    return s
+      .replace(/([零一二三四五六七八九十两])(?=[点時时])/g, (_, cn) => {
+        const map = { 零:0, 一:1, 二:2, 三:3, 四:4, 五:5, 六:6, 七:7, 八:8, 九:9, 十:10, 两:2 };
+        return map[cn] ?? cn;
+      })
+      .replace(/十([一二三四五六七八九])[点時时]/g, (_, u) => (10 + parseInt(u)) + '点')
+      .replace(/十一[点時时]/g, '11点').replace(/十二[点時时]/g, '12点');
+  },
+  parseSchedule(text) {
+    const raw = text.trim(); if (!raw) return null;
+    const t = this._normalizeCnTime(raw);
+    let date = this._parseDate(t);
+    // Match time ranges: "12点到2点", "3点到4点半", "14:00-16:00", "3点到六点"
+    const rangeM = t.match(/(\d{1,2})[点:时](\d{1,2})?\s*[到至\-~～]\s*(\d{1,2})[点:时](\d{1,2})?/);
+    // Match standalone time: "3点", "下午3点"
+    const tm = !rangeM ? t.match(/(\d{1,2})[点:时](\d{1,2})?/) : null;
+    // Build title by stripping date/time/prefix noise
+    let title = t
+      .replace(/日程[：:]\s*|备忘[：:]\s*|提醒[：:]\s*|安排[：:]\s*|提醒我/g, '')
+      .replace(/今天|明天|后天|昨天|昨日|明日|今|明|后/g, '')
+      .replace(/上午|下午|晚上|早上|中午|凌晨/g, '')
+      .replace(/\d{1,2}[点:时](?:\d{1,2}分?)?\s*[到至\-~～]\s*\d{1,2}[点:时](?:\d{1,2}分?)?/g, '')
+      .replace(/\d{1,2}[点:时](?:\d{1,2}分?)?/g, '')
+      .replace(/从|到|在|开始|结束|持续|大概|大约|左右/g, '')
+      .replace(/^我/g, '')
+      .replace(/^(.?)[了过个]/g, '$1')
+      .replace(/(一|两)?(顿|份|杯|瓶|个|碗|盘|次|件|套|包|盒|箱)/g, '')
+      .replace(/[，。,\s]+$/, '').trim();
+    if (!title) title = '日程安排';
+    let start = date, end = date;
+    if (rangeM) {
+      let h1 = parseInt(rangeM[1]); let m1 = parseInt(rangeM[2] || 0);
+      let h2 = parseInt(rangeM[3]); let m2 = parseInt(rangeM[4] || 0);
+      // If end hour is earlier than start hour, assume PM next cycle (e.g. 12点到2点)
+      if (h2 < h1) h2 += 12;
+      const hh1 = String(h1).padStart(2, '0'); const mm1 = String(m1).padStart(2, '0');
+      const hh2 = String(h2).padStart(2, '0'); const mm2 = String(m2).padStart(2, '0');
+      start = `${date} ${hh1}:${mm1}`; end = `${date} ${hh2}:${mm2}`;
+    } else if (tm) {
+      const h = tm[1].padStart(2, '0'); const m = (tm[2] || '00').padStart(2, '0');
+      start = `${date} ${h}:${m}`; end = `${date} ${String(parseInt(h) + 1).padStart(2, '0')}:${m}`;
+    }
+    if (/明天|明日/.test(t)) { start = start.replace(this._today(), this._tomorrow()); end = end.replace(this._today(), this._tomorrow()); }
+    if (/后天/.test(t)) { const after = this._ymd(new Date(Date.now()+172800000)); start = start.replace(this._today(), after); end = end.replace(this._today(), after); }
+    return { 记录标题: title, 开始日期: start, 结束日期: end, 同步日历: true, 备注: '' };
+  }
+};
+
+/* ===================================================================
+ *   AI CLIENT — OpenAI-compatible API
+ * =================================================================== */
+const AIClient = {
+  get _isLocalhost() {
+    return location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  },
+  async chat(messages, options) {
+    const aiCfg = (cfg && cfg.ai) || {};
+
+    // If running on localhost, route through our server proxy
+    // which reads DASHSCOPE_API_KEY from environment variable (no hardcoded key)
+    if (this._isLocalhost) {
+      const model = aiCfg.model || 'qwen-3.7';
+      const resp = await fetch('/api/dashscope/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: options && options.temperature != null ? options.temperature : 0.3,
+          max_tokens: options && options.maxTokens != null ? options.maxTokens : 1024
+        })
+      });
+      if (!resp.ok) {
+        let msg = `HTTP ${resp.status}`;
+        try { const j = await resp.json(); msg = j.error?.message || JSON.stringify(j); } catch {}
+        throw new Error(msg);
+      }
+      const json = await resp.json();
+      return json.choices && json.choices[0] && json.choices[0].message ? json.choices[0].message.content : '';
+    }
+
+    // Fallback: direct API call (for non-localhost scenarios)
+    const baseUrl = (aiCfg.baseUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(/\/$/, '');
+    const apiKey = aiCfg.key || '';
+    const model = aiCfg.model || 'qwen-3.7';
+    if (!apiKey) throw new Error('未配置 AI API Key');
+    const resp = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: options && options.temperature != null ? options.temperature : 0.3,
+        max_tokens: options && options.maxTokens != null ? options.maxTokens : 1024
+      })
+    });
+    if (!resp.ok) {
+      let msg = `HTTP ${resp.status}`;
+      try { const j = await resp.json(); msg = j.error?.message || JSON.stringify(j); } catch {}
+      throw new Error(msg);
+    }
+    const json = await resp.json();
+    return json.choices && json.choices[0] && json.choices[0].message ? json.choices[0].message.content : '';
+  }
+};
+
+async function aiParseInput(text, currentModule) {
+  const today = Engine._today();
+  const tomorrow = Engine._tomorrow();
+  const systemPrompt = `你是一个个人管理系统的智能助手。用户会输入自然语言描述，你需要：
+1. 判断输入属于哪个模块：finance(记账)、habit(习惯打卡)、reading(阅读记录)、diary(日记)、schedule(日程安排)
+2. 提取对应模块的结构化字段
+3. 返回严格的 JSON 格式，不要返回任何其他文本
+
+各模块字段要求：
+- finance: 单条时返回 { module: "finance", 款项: string, 流水: number(正为收入负为支出), 日期: "YYYY/MM/DD", 分类: string, 备注: string }；多条商品时返回 { module: "finance", items: [{款项,流水,分类}] } 数组格式
+- habit: { module: "habit", 打卡日期: "YYYY-MM-DD", 习惯名称: string, 完成数量: number, 备注: string }
+- reading: { module: "reading", 书名: string, 阅读方式: string, 进度: string, 开始日期: "YYYY-MM-DD", 感悟: string, 类目: string, 字数: number(可选), 阅读提问: string(可选) }
+- diary: { module: "diary", 日期: "YYYY-MM-DD", 能量: "1星|2星|3星|4星|5星", 今日情绪: string, 今日收获: string, 关键复盘: string, 一句话: string }
+- schedule: { module: "schedule", 记录标题: string, 开始日期: "YYYY/MM/DD HH:mm", 结束日期: "YYYY/MM/DD HH:mm", 同步日历: boolean, 备注: string }
+
+注意：
+- 书名通常用书名号《》包裹，如果没有书名号，提取开头的书名部分
+- 金额支持中文数字（如"三十元"转换为30），流水字段支出为负数、收入为正数
+- 日期中的"今天"转换为${today}，"明天"转换为${tomorrow}
+- 日程的时间范围如"从三点到五点"需要正确解析为开始和结束时间
+- 当前模块是 ${currentModule}，如果内容明显属于其他模块，请在 JSON 中返回正确的 module 字段
+- 如果用户一次性说了多笔消费（如"西瓜6块，牛奶7块"），请返回 items 数组格式
+- 字数(可选)和阅读提问(可选)：仅当用户明确提及字数或阅读提问时才填写，严禁 AI 捏造或强行生成`;
+
+  const content = await AIClient.chat([
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: text }
+  ]);
+
+  // Extract JSON from markdown code block if present
+  const jsonMatch = content.match(/```json\s*([\s\S]*?)```/) || content.match(/```\s*([\s\S]*?)```/) || [null, content];
+  const jsonStr = jsonMatch[1].trim();
+  try {
+    return JSON.parse(jsonStr);
+  } catch (e) {
+    throw new Error('AI 返回内容无法解析为 JSON');
+  }
+}
+
+/* ===================================================================
+ *   VOICE INPUT
+ * =================================================================== */
+const Voice = {
+  _rec: null,
+  _activeModule: null,
+  _finalTranscript: '',
+  _interimTranscript: '',
+  _stoppedByUser: false,
+  _restartTimer: null,
+  supported: ('webkitSpeechRecognition' in window) || ('SpeechRecognition' in window),
+
+  // Create a fresh SpeechRecognition instance every time
+  _createRec() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return null;
+    const rec = new SR();
+    rec.lang = 'zh-CN';
+    rec.continuous = true;
+    rec.interimResults = true;
+    return rec;
+  },
+
+  start(module, onResult) {
+    if (!this.supported) {
+      showToast('当前浏览器不支持语音输入（需要 Chrome/Edge 浏览器）', 'error', 5000);
+      return;
+    }
+
+    this._cleanup();
+
+    this._stoppedByUser = false;
+    this._activeModule = module;
+    this._finalTranscript = '';
+    this._interimTranscript = '';
+
+    const rec = this._createRec();
+    if (!rec) { showToast('语音服务不可用', 'error'); return; }
+    this._rec = rec;
+
+    if (module === 'finance') Cart.clear();
+    const input = document.getElementById(module + 'Input');
+    if (input) input.value = '';
+
+    rec.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; ++i) {
+        if (e.results[i].isFinal) {
+          this._finalTranscript += e.results[i][0].transcript;
+        } else {
+          interim += e.results[i][0].transcript;
+        }
+      }
+      this._interimTranscript = interim;
+      if (input) {
+        input.value = this._finalTranscript + this._interimTranscript;
+        input.style.height = 'auto';
+        input.style.height = input.scrollHeight + 'px';
+      }
+    };
+
+    rec.onerror = (e) => {
+      if (e.error === 'no-speech') {
+        // No speech detected — auto restart after short delay
+        if (!this._stoppedByUser) {
+          clearTimeout(this._restartTimer);
+          this._restartTimer = setTimeout(() => {
+            if (!this._stoppedByUser && this._rec === rec) {
+              try { rec.start(); } catch (err) {}
+            }
+          }, 300);
+        }
+        return;
+      }
+      if (e.error === 'aborted') return;
+      if (e.error === 'not-allowed') {
+        showToast('麦克风权限被拒绝，请在浏览器设置中允许麦克风访问', 'error', 6000);
+        this._stopHighlight(module);
+        this._cleanup();
+        return;
+      }
+      if (e.error === 'audio-capture') {
+        showToast('未检测到麦克风设备', 'error');
+        this._stopHighlight(module);
+        this._cleanup();
+        return;
+      }
+      showToast('语音识别故障: ' + e.error, 'error');
+    };
+
+    rec.onend = () => {
+      if (this._stoppedByUser) {
+        // User clicked stop — don't restart, deliver results
+        this._stopHighlight(module);
+        const finalText = (this._finalTranscript || this._interimTranscript || '').trim();
+        if (onResult && finalText) onResult(finalText);
+        this._cleanup();
+        return;
+      }
+      // Browser auto-ended (silence / timeout) — restart automatically
+      const btn = document.querySelector(`.voice-btn[data-module="${module}"]`);
+      if (btn && btn.classList.contains('recording')) {
+        clearTimeout(this._restartTimer);
+        this._restartTimer = setTimeout(() => {
+          if (!this._stoppedByUser && this._rec === rec) {
+            try { rec.start(); } catch (err) {}
+          }
+        }, 100);
+      } else {
+        this._stopHighlight(module);
+        const finalText = (this._finalTranscript || this._interimTranscript || '').trim();
+        if (onResult && finalText) onResult(finalText);
+        this._cleanup();
+      }
+    };
+
+    this._highlight(module);
+
+    setTimeout(() => {
+      if (this._rec === rec && !this._stoppedByUser) {
+        try { 
+          rec.start(); 
+        }
+        catch (err) {
+          console.error('[Voice] rec.start() failed:', err.message, err.name);
+          Debug.log('❌ 语音启动失败: ' + err.message, 'error');
+          showToast('语音启动失败，请重试', 'error');
+          this._stopHighlight(module);
+          this._cleanup();
+        }
+      } else {
+        console.log('[Voice] Start cancelled: rec changed or stopped by user');
+      }
+    }, 80);
+  },
+
+  stop() {
+    this._stoppedByUser = true;
+    clearTimeout(this._restartTimer);
+    if (this._activeModule) this._stopHighlight(this._activeModule);
+    if (this._rec) {
+      try { this._rec.abort(); } catch (e) {}
+    }
+    // Cleanup happens in onend
+  },
+
+  // Release the current recognition instance completely
+  _cleanup() {
+    clearTimeout(this._restartTimer);
+    if (this._rec) {
+      this._rec.onresult = null;
+      this._rec.onerror = null;
+      this._rec.onend = null;
+      try { this._rec.abort(); } catch (e) {}
+      this._rec = null;
+    }
+  },
+
+  _highlight(module) {
+    const btn = document.querySelector(`.voice-btn[data-module="${module}"]`);
+    if (btn) { btn.classList.add('recording'); btn.title = '停止录音'; }
+  },
+
+  _stopHighlight(module) {
+    const btn = document.querySelector(`.voice-btn[data-module="${module}"]`);
+    if (btn) { btn.classList.remove('recording'); btn.title = '语音输入'; }
+  }
+};
+
+/* ===================================================================
+ *   DEBUG PANEL — collapsible dev console
+ * =================================================================== */
+const Debug = {
+  _logs: [],
+  _activeTab: 'logs',
+  
+  init() {
+    // Store max 200 log entries
+    this._logs = [];
+    console.log('[Debug] Panel initialized');
+  },
+
+  log(msg, tag) {
+    const time = new Date().toLocaleTimeString();
+    tag = tag || 'info';
+    this._logs.push({ time, msg, tag });
+    if (this._logs.length > 200) this._logs.shift();
+    this._renderLogs();
+  },
+
+  error(msg) {
+    this.log(msg, 'err');
+    // Auto-show panel on error
+    const panel = document.getElementById('debugPanel');
+    if (panel && !panel.classList.contains('show')) this.show();
+  },
+
+  toggle() { 
+    const panel = document.getElementById('debugPanel');
+    const btn = document.getElementById('debugToggle');
+    if (panel.classList.contains('show')) { this.close(); }
+    else { this.show(); }
+  },
+
+  show() {
+    document.getElementById('debugPanel').classList.add('show');
+    document.getElementById('debugToggle').classList.add('active');
+    this._renderLogs();
+    if (this._activeTab === 'rules') this._renderRules();
+  },
+
+  close() {
+    document.getElementById('debugPanel').classList.remove('show');
+    document.getElementById('debugToggle').classList.remove('active');
+  },
+
+  switchTab(tab) {
+    this._activeTab = tab;
+    document.querySelectorAll('.debug-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+    document.getElementById('debugLogs').classList.toggle('hidden', tab !== 'logs');
+    document.getElementById('debugRules').classList.toggle('hidden', tab !== 'rules');
+    if (tab === 'rules') this._renderRules();
+    else this._renderLogs();
+  },
+
+  _renderLogs() {
+    const el = document.getElementById('debugLogs');
+    if (!el) return;
+    if (this._logs.length === 0) {
+      el.innerHTML = '<div class="debug-empty">暂无日志，开始使用后会自动记录</div>';
+      return;
+    }
+    el.innerHTML = this._logs.slice().reverse().map(l => {
+      const tagMap = { info:'info', warn:'warn', err:'err', ok:'ok', rule:'rule' };
+      return `<div class="debug-log">
+        <span class="log-time">${l.time}</span>
+        <span class="log-tag ${tagMap[l.tag] || 'info'}">${l.tag}</span>
+        <span class="log-msg">${l.msg}</span>
+      </div>`;
+    }).join('');
+  },
+
+  _renderRules() {
+    const el = document.getElementById('debugRules');
+    if (!el) return;
+    const rules = LocalRules.getAll();
+    if (rules.length === 0) {
+      el.innerHTML = '<div class="debug-empty">暂无已学习的本地规则。<br>使用 AI 解析并确认后，系统会自动学习规则。</div>';
+      return;
+    }
+    el.innerHTML = rules.slice().reverse().map(r => `
+      <div class="debug-rule-item">
+        <div class="rule-pattern">/${this._escHtml(r.pattern)}/</div>
+        <div class="rule-meta">
+          模块: ${r.module} | 分类: ${r.category || '-'} | 
+          命中: ${r.hitCount || 0} 次 | 
+          创建: ${new Date(r.createdAt).toLocaleDateString()}
+        </div>
+      </div>
+    `).join('');
+  },
+
+  _escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+};
+
+/* ===================================================================
+ *   TEMP CART — voice shopping cart for multi-item accounting
+ * =================================================================== */
+const Cart = {
+  _items: [],
+
+  add(item, price) {
+    this._items.push({ id: genUUID(), item, price: parseFloat(price) || 0 });
+    this._render();
+  },
+
+  remove(id) {
+    this._items = this._items.filter(i => i.id !== id);
+    this._render();
+  },
+
+  clear() {
+    this._items = [];
+    this._render();
+  },
+
+  getAll() { return this._items; },
+
+  total() {
+    return this._items.reduce((sum, i) => sum + Math.abs(i.price), 0);
+  },
+
+  _render() {
+    const preview = document.getElementById('cartPreview');
+    const itemsEl = document.getElementById('cartItems');
+    const countEl = document.getElementById('cartCount');
+    const totalEl = document.getElementById('cartTotal');
+    if (!preview || !itemsEl) return;
+
+    if (this._items.length === 0) {
+      preview.classList.remove('show');
+      return;
+    }
+
+    preview.classList.add('show');
+    countEl.textContent = `(${this._items.length}件)`;
+    
+    itemsEl.innerHTML = this._items.map(i => `
+      <div class="cart-item">
+        <span class="cart-item-name">${this._esc(i.item)}</span>
+        <span class="cart-item-price">${Math.abs(i.price)}元</span>
+        <span class="cart-item-remove" onclick="Cart.remove('${i.id}')">✕</span>
+      </div>
+    `).join('');
+
+    const t = this.total();
+    totalEl.style.display = t > 0 ? '' : 'none';
+    totalEl.querySelector('span').textContent = t + '元';
+  },
+
+  _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+};
+
+function clearCart() { Cart.clear(); }
+
+function saveCartToFinance() {
+  const items = Cart.getAll();
+  if (items.length === 0) { showToast('购物车为空', 'warn'); return; }
+  const date = document.getElementById('financeDate').value || new Date().toISOString().split('T')[0];
+  const cat = document.getElementById('financeCat').value || '其他';
+  items.forEach(item => {
+    DataManager.add('finance', {
+      款项: item.item,
+      流水: -Math.abs(item.price),
+      日期: date.replace(/-/g, '/'),
+      分类: cat
+    });
+  });
+  Memory.add({ 
+    userInput: `购物车批量记账 ${items.length} 笔`, 
+    module: 'finance', 
+    response: `已保存 ${items.length} 笔`, 
+    items: items.map(i => ({ item: i.item, price: i.price })),
+    type: 'batch_create'
+  });
+  Cart.clear();
+  SyncManager.updateModuleUI('finance');
+  updateModuleBadges();
+  showToast(`已保存 ${items.length} 笔账单`, 'success');
+}
+
+/* ===================================================================
+ *   MEMORY / AUDIT LOG
+ * =================================================================== */
+const MEMORY_KEY = 'pms_memory';
+const Memory = {
+  _load() { try { return JSON.parse(localStorage.getItem(MEMORY_KEY)) || []; } catch { return []; } },
+  _save(e) { const t = e.slice(-500); localStorage.setItem(MEMORY_KEY, JSON.stringify(t)); DBBackup.setMemory(t); },
+  add(entry) {
+    const all = this._load();
+    all.push({ id: genUUID(), timestamp: new Date().toISOString(), ...entry });
+    this._save(all);
+  },
+  getAll() { return this._load(); },
+  clear() { localStorage.removeItem(MEMORY_KEY); DBBackup.setMemory([]); },
+  async restoreFromDB() {
+    const fromDB = await DBBackup.getMemory();
+    if (fromDB && fromDB.length > 0) {
+      const current = this._load();
+      if (current.length === 0) {
+        localStorage.setItem(MEMORY_KEY, JSON.stringify(fromDB));
+        return true;
+      }
+    }
+    return false;
+  }
+};
+
+/* ===================================================================
+ *   UI HELPERS
+ * =================================================================== */
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+function showToast(msg, type, duration) {
+  const t = document.createElement('div');
+  t.className = 'toast ' + (type || 'info');
+  t.textContent = msg;
+  const c = document.getElementById('toastContainer');
+  c.appendChild(t);
+  setTimeout(() => t.remove(), duration || 3500);
+}
+
+function updateModuleBadges() {
+  ['finance', 'habit', 'reading', 'diary', 'schedule'].forEach(m => {
+    const pending = DataManager.getPending(m).length;
+    const badge = document.getElementById('badge-' + m);
+    if (badge) { badge.textContent = pending; badge.className = 'badge' + (pending === 0 ? ' zero' : ''); }
+  });
+}
+
+/* ===================================================================
+ *   MODULE RECORDS RENDERING
+ * =================================================================== */
+
+function renderModuleRecords(module) {
+  const records = DataManager.getAll(module).reverse();
+  const containerId = module + 'Records';
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  if (records.length === 0) {
+    const icons = { finance: '💰', habit: '✅', reading: '📚', diary: '📔', schedule: '📅' };
+    const msgs = { finance: '暂无记录，开始记账吧', habit: '暂无打卡记录', reading: '暂无阅读记录', diary: '暂无日记', schedule: '暂无日程' };
+    container.innerHTML = `<div class="records-empty"><div class="empty-icon">${icons[module]||'📋'}</div>${msgs[module]||'暂无数据'}</div>`;
+    return;
+  }
+
+  // Diary: group by date, collapse same-day records
+  if (module === 'diary') {
+    const groups = {};
+    records.forEach(r => {
+      const d = r.data.日期 || '无日期';
+      if (!groups[d]) groups[d] = [];
+      groups[d].push(r);
+    });
+    const groupKeys = Object.keys(groups).sort().reverse();
+    let html = '';
+    groupKeys.forEach((date, gi) => {
+      const groupRecs = groups[date];
+      const pendingCount = groupRecs.filter(r => r.syncStatus === 'pending').length;
+      const countLabel = pendingCount > 0 ? `（${pendingCount}条待同步）` : '';
+      html += `<div class="diary-date-group">
+        <div class="diary-date-header" onclick="toggleDiaryGroup(this)" style="cursor:pointer;padding:8px 12px;background:rgba(0,0,0,0.03);border-radius:8px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">
+          <strong>📅 ${esc(date)}${countLabel}</strong>
+          <span style="font-size:11px;color:var(--sub);">${groupRecs.length}条 ▾</span>
+        </div>
+        <div class="diary-date-body" style="padding-left:4px;">
+          ${groupRecs.map(r => renderRecordCard(module, r, /* hideDate */ true)).join('')}
+        </div>
+      </div>`;
+      if (gi < groupKeys.length - 1) html += '<hr style="border:none;border-top:1px dashed var(--gray);margin:6px 0;">';
+    });
+    container.innerHTML = html;
+  } else {
+    container.innerHTML = records.map(r => renderRecordCard(module, r)).join('');
+  }
+}
+
+function toggleDiaryGroup(el) {
+  const body = el.nextElementSibling;
+  if (!body) return;
+  const hidden = body.style.display === 'none';
+  body.style.display = hidden ? '' : 'none';
+  const arrow = el.querySelector('span:last-child');
+  if (arrow) arrow.textContent = hidden ? `${body.querySelectorAll('.record-card').length}条 ▾` : `${body.querySelectorAll('.record-card').length}条 ▸`;
+}
+
+function renderRecordCard(module, rec, hideDate) {
+  const isPending = rec.syncStatus === 'pending';
+  const dot = isPending ? '🟡' : '🟢';
+  const cls = isPending ? 'record-card pending' : 'record-card synced';
+  const d = new Date(rec.timestamp);
+  const timeStr = `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  const statusLabel = isPending ? '待同步' : '已同步';
+
+  let fieldsHtml = '';
+
+  switch (module) {
+    case 'finance':
+      const isIncome = (rec.data.流水 || 0) >= 0;
+      fieldsHtml = `
+        <div class="card-field"><span class="card-key">款项</span><span class="card-val">${esc(rec.data.款项||'')}</span></div>
+        <div class="card-field"><span class="card-key">金额</span><span class="card-amount ${isIncome?'income':'expense'}">${rec.data.流水||0}元</span></div>
+        <div class="card-field"><span class="card-key">分类</span><span>${esc(rec.data.分类||'')}</span></div>
+        <div class="card-field"><span class="card-key">日期</span><span>${esc(rec.data.日期||'')}</span></div>`;
+      break;
+    case 'habit':
+      fieldsHtml = `
+        <div class="card-field"><span class="card-key">日期</span><span>${esc(rec.data.日期||'')}</span></div>
+        <div class="card-field"><span class="card-key">习惯</span><span>${(rec.data.habits||[]).join('、')}</span></div>`;
+      break;
+    case 'reading':
+      fieldsHtml = `
+        <div class="card-field"><span class="card-key">书名</span><span class="card-val">${esc(rec.data.书名||'')}</span></div>
+        <div class="card-field"><span class="card-key">类目</span><span>${esc(rec.data.类目||'')}</span></div>
+        <div class="card-field"><span class="card-key">进度</span><span>${esc(rec.data.进度||'')}</span></div>
+        <div class="card-field"><span class="card-key">方式</span><span>${esc(rec.data.阅读方式||'')}</span></div>
+        ${rec.data.字数 ? `<div class="card-field"><span class="card-key">字数</span><span>${esc(String(rec.data.字数))}</span></div>` : ''}
+        ${rec.data.感悟 ? `<div class="card-field"><span class="card-key">感悟</span><span>${esc(rec.data.感悟)}</span></div>` : ''}
+        ${rec.data.阅读提问 ? `<div class="card-field"><span class="card-key">提问</span><span>${esc(rec.data.阅读提问)}</span></div>` : ''}`;
+      break;
+    case 'diary':
+      fieldsHtml = `
+        ${!hideDate ? `<div class="card-field"><span class="card-key">日期</span><span>${esc(rec.data.日期||'')}</span></div>` : ''}
+        <div class="card-field"><span class="card-key">能量</span><span>${esc(rec.data.能量||'')}</span></div>
+        <div class="card-field"><span class="card-key">总结</span><span>${esc(rec.data.一句话||'')}</span></div>
+        ${rec.data.今日情绪 ? `<div class="card-field"><span class="card-key">情绪</span><span>${esc(rec.data.今日情绪)}</span></div>` : ''}
+        ${rec.data.今日收获 ? `<div class="card-field"><span class="card-key">收获</span><span>${esc(rec.data.今日收获)}</span></div>` : ''}`;
+      break;
+    case 'schedule':
+      fieldsHtml = `
+        <div class="card-field"><span class="card-key">标题</span><span class="card-val">${esc(rec.data.记录标题||'')}</span></div>
+        <div class="card-field"><span class="card-key">开始</span><span>${esc(rec.data.开始日期||'')}</span></div>
+        <div class="card-field"><span class="card-key">结束</span><span>${esc(rec.data.结束日期||'')}</span></div>`;
+      break;
+  }
+
+  return `<div class="${cls}">
+    <span class="sync-dot" title="${statusLabel}">${dot}</span>
+    <div class="card-body">
+      <div class="card-fields">${fieldsHtml}</div>
+      <div style="font-size:10px;color:var(--sub);margin-top:4px;">${timeStr} · ${statusLabel}</div>
+    </div>
+    <div class="card-actions">
+      <button onclick="deleteLocalRecord('${module}','${rec.id}')" title="删除">🗑️</button>
+    </div>
+  </div>`;
+}
+
+function deleteLocalRecord(module, localId) {
+  if (!confirm('确定删除这条本地记录吗？')) return;
+  DataManager.remove(module, localId);
+  SyncManager.updateModuleUI(module);
+  updateModuleBadges();
+  showToast('已删除', 'info');
+}
+
+/* ===================================================================
+ *   MODULE SWITCHING
+ * =================================================================== */
+let currentModule = 'finance';
+
+function switchModule(module) {
+  currentModule = module;
+  // Toggle active nav item
+  document.querySelectorAll('.nav-item[data-module]').forEach(el => el.classList.remove('active'));
+  const navItem = document.querySelector(`.nav-item[data-module="${module}"]`);
+  if (navItem) navItem.classList.add('active');
+  // Toggle active view
+  document.querySelectorAll('.module-view').forEach(v => v.classList.remove('active'));
+  const view = document.getElementById('view-' + module);
+  if (view) view.classList.add('active');
+  // Refresh
+  SyncManager.updateModuleUI(module);
+  updateModuleBadges();
+  // Focus input
+  setTimeout(() => {
+    const input = document.getElementById(module + 'Input');
+    if (input) input.focus();
+  }, 100);
+  // Mobile: close sidebar
+  if (window.innerWidth <= 768) closeSidebar();
+}
+
+/* ===================================================================
+ *   MODULE INPUT HANDLING
+ * =================================================================== */
+
+function handleModuleKey(e, module) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); processModuleInput(module); }
+}
+
+function clearModuleInput(module) {
+  // Stop voice recording if active
+  const btn = document.querySelector(`.voice-btn[data-module="${module}"]`);
+  if (btn && btn.classList.contains('recording')) Voice.stop();
+  // Clear textarea content
+  const input = document.getElementById(module + 'Input');
+  if (input) { input.value = ''; input.style.height = 'auto'; }
+  // Clear cart if finance
+  if (module === 'finance') Cart.clear();
+}
+
+function toggleModuleVoice(module) {
+  // File:// protocol blocks speech recognition — must use localhost
+  if (location.protocol === 'file:') {
+    showToast('语音输入需要本地服务器。请双击 启动应用.bat', 'error', 6000);
+    return;
+  }
+
+  try {
+    const btn = document.querySelector(`.voice-btn[data-module="${module}"]`);
+    if (btn && btn.classList.contains('recording')) {
+      Voice.stop();
+      return;
+    }
+    if (module === 'finance') { Cart.clear(); }
+    Voice.start(module, (text) => {
+      const input = document.getElementById(module + 'Input');
+      if (input) {
+        input.value = text;
+        processModuleInput(module);
+      }
+    });
+  } catch (e) {
+    showToast('语音功能异常: ' + e.message, 'error');
+  }
+}
+
+async function processModuleInput(module) {
+  const input = document.getElementById(module + 'Input');
+  if (!input) return;
+  const text = input.value.trim();
+  if (!text) return;
+
+  Debug.log(`输入:「${text.substring(0, 40)}${text.length > 40 ? '...' : ''}」→ 模块: ${module}`, 'info');
+
+  let result = null;
+  let usedAI = false;
+  let usedLocal = false;
+
+  // --- Priority 1: Local Rules (0ms, instant) ---
+  const localResult = LocalRules.match(text);
+  if (localResult && localResult.module && localResult.module !== module) {
+    // Cross-module local rule match
+    const modMap = { finance: 'finance', habit: 'habit', reading: 'reading', diary: 'diary', schedule: 'schedule' };
+    const target = modMap[localResult.module];
+    if (target && target !== module) {
+      showToast(`本地规则识别为「${target === 'finance' ? '记账' : target === 'habit' ? '习惯' : target === 'reading' ? '阅读' : target === 'diary' ? '日记' : '日程'}」模块，已自动切换`, 'info', 2500);
+      switchModule(target);
+      // Re-process after switch
+      document.getElementById(target + 'Input').value = text;
+      return;
+    }
+  }
+
+  if (localResult) {
+    result = localResult;
+    usedLocal = true;
+    Debug.log(`本地规则命中 → ${localResult.module}`, 'ok');
+  }
+
+  // --- Priority 2: AI (async) ---
+  if (!result && cfg.ai && cfg.ai.enabled && cfg.ai.key) {
+    try {
+      Debug.log('调用 AI API...', 'info');
+      showToast('AI 正在解析中...', 'info', 2000);
+      const aiResult = await aiParseInput(text, module);
+      if (aiResult && (aiResult.module || (aiResult.items && aiResult.items.length))) {
+        usedAI = true;
+        // Track for shadow learning on confirm
+        _lastAiParseText = text;
+        _lastAiParseResult = aiResult;
+        let aiModule = aiResult.module || module;
+        const modMap = { finance: 'finance', habit: 'habit', reading: 'reading', diary: 'diary', schedule: 'schedule' };
+        const target = modMap[aiModule] || module;
+        if (target !== module) {
+          showToast(`AI 识别为「${target === 'finance' ? '记账' : target === 'habit' ? '习惯' : target === 'reading' ? '阅读' : target === 'diary' ? '日记' : '日程'}」模块，已自动切换`, 'info', 3000);
+          switchModule(target);
+          module = target;
+        }
+        result = aiResult;
+        Debug.log('AI 解析成功', 'ok');
+      }
+    } catch (e) {
+      console.warn('AI parse failed, fallback to local NLP:', e);
+      Debug.error('AI 解析失败: ' + e.message);
+      showToast('AI 解析失败，回退到本地规则', 'error', 3000);
+    }
+  }
+
+  // --- Priority 3: Local NLP fallback ---
+  if (!result) {
+    Debug.log('使用本地 NLP 引擎', 'info');
+    switch (module) {
+      case 'finance':
+        result = Engine.parseFinance(text);
+        if (!result) { showToast('未能解析金额信息，请手动填写', 'error'); Debug.log('NLP 无法解析金额', 'warn'); return; }
+        break;
+      case 'reading':
+        result = Engine.parseReading(text);
+        if (!result) { showToast('未能识别书名，请手动填写', 'error'); Debug.log('NLP 无法识别书名', 'warn'); return; }
+        break;
+      case 'diary':
+        result = Engine.parseDiary(text);
+        if (!result) { showToast('未能解析日记内容，请手动填写', 'error'); Debug.log('NLP 无法解析日记', 'warn'); return; }
+        break;
+      case 'schedule':
+        result = Engine.parseSchedule(text);
+        if (!result) { showToast('未能解析日程信息，请手动填写', 'error'); Debug.log('NLP 无法解析日程', 'warn'); return; }
+        break;
+      case 'habit':
+        showToast('习惯打卡请直接手动填写或点击确认', 'info');
+        Debug.log('习惯模块需要手动填写', 'warn');
+        return;
+    }
+    Debug.log('NLP 解析成功', 'ok');
+  }
+
+  // --- Handle finance multi-item (cart mode) ---
+  if (module === 'finance' && result.items && result.items.length > 0) {
+    const date = (result.items[0].日期 || Engine._today()).replace(/\//g, '-');
+    result.items.forEach(item => {
+      Cart.add(item.款项 || item.item || '未名项', item.流水 || item.price || 0);
+    });
+    Debug.log(`购物车添加 ${result.items.length} 件商品`, 'ok');
+    showToast(`已添加 ${result.items.length} 件商品到购物车`, 'success');
+    input.value = '';
+    input.style.height = 'auto';
+    // Also fill in the preview form with the last item
+    const last = result.items[result.items.length - 1];
+    if (last) {
+      document.getElementById('financeAmount').value = Math.abs(last.流水 || last.price || 0);
+      document.getElementById('financeItem').value = last.款项 || last.item || '';
+      document.getElementById('financeCat').value = last.分类 || '其他';
+      document.getElementById('financeDate').value = date;
+      document.getElementById('financeManualBtn').disabled = false;
+    }
+    return;
+  }
+
+  // --- Handle single finance result: add to cart if from voice ---
+  if (module === 'finance' && result.流水) {
+    const amt = Math.abs(result.流水 || 0);
+    const itemName = result.款项 || '未知款项';
+    // If this was from a voice stop (input was just filled), add to cart
+    const inputEmpty = !input.value.trim();
+    if (inputEmpty || usedAI) {
+      Cart.add(itemName, -amt);
+      Debug.log(`购物车添加: ${itemName} ${amt}元`, 'ok');
+    }
+    document.getElementById('financeAmount').value = amt;
+    document.getElementById('financeItem').value = itemName;
+    document.getElementById('financeCat').value = result.分类 || '其他';
+    document.getElementById('financeDate').value = (result.日期 || Engine._today()).replace(/\//g, '-');
+    document.getElementById('financeManualBtn').disabled = false;
+    showToast(usedAI ? 'AI 已解析账单' : usedLocal ? '本地规则已解析账单' : '已解析账单信息，请确认', 'info');
+  } 
+  // --- Fill other module forms ---
+  else if (module !== 'finance') {
+    fillFormFromResult(module, result, usedAI, usedLocal);
+  }
+
+  // Store interaction for learning & memory
+  const rawText = text;
+  input.value = '';
+  input.style.height = 'auto';
+
+  if (result && !result.items) {
+    Memory.add({ userInput: rawText, module, response: usedAI ? 'AI 已解析' : (usedLocal ? '本地规则匹配' : 'NLP 已解析'), data: result, type: 'preview', _aiResult: result, _usedAI: usedAI });
+  }
+}
+
+/* ===================================================================
+ *   FILL FORM FROM RESULT — shared form fill logic
+ * =================================================================== */
+function fillFormFromResult(module, result, usedAI, usedLocal) {
+  switch (module) {
+    case 'habit':
+      document.getElementById('habitName').value = result.习惯名称 || '';
+      document.getElementById('habitCount').value = result.完成数量 || 1;
+      document.getElementById('habitDate').value = (result.打卡日期 || new Date().toISOString().split('T')[0]).replace(/\//g, '-');
+      showToast(usedAI ? 'AI 已解析习惯信息' : (usedLocal ? '本地规则匹配' : '已解析习惯信息'), 'info');
+      break;
+    case 'reading':
+      document.getElementById('readingTitle').value = result.书名 || '';
+      document.getElementById('readingMethod').value = result.阅读方式 || '';
+      document.getElementById('readingProgress').value = result.进度 || '在读';
+      document.getElementById('readingDate').value = (result.开始日期 || new Date().toISOString().split('T')[0]).replace(/\//g, '-');
+      document.getElementById('readingNote').value = result.感悟 || '';
+      // New fields: 字数 and 阅读提问
+      if (result.字数) document.getElementById('readingWordCount').value = result.字数;
+      if (result.阅读提问) document.getElementById('readingQuestion').value = result.阅读提问;
+      updateReadingCat(result.类目);
+      readingPreviewRefresh();
+      document.getElementById('readingManualBtn').disabled = false;
+      showToast(usedAI ? 'AI 已解析书籍信息' : (usedLocal ? '本地规则匹配' : '已解析书籍信息'), 'info');
+      break;
+    case 'diary':
+      document.getElementById('diaryDate').value = (result.日期 || new Date().toISOString().split('T')[0]).replace(/\//g, '-');
+      document.getElementById('diaryEnergy').value = result.能量 || '3星';
+      document.getElementById('diaryMood').value = result.今日情绪 || '';
+      document.getElementById('diaryGain').value = result.今日收获 || '';
+      document.getElementById('diaryReview').value = result.关键复盘 || '';
+      document.getElementById('diaryOne').value = result.一句话 || '';
+      showToast(usedAI ? 'AI 已解析日记信息' : (usedLocal ? '本地规则匹配' : '已解析日记信息'), 'info');
+      break;
+    case 'schedule':
+      document.getElementById('scheduleTitle').value = result.记录标题 || '';
+      {
+        const st = result.开始日期 || '';
+        document.getElementById('scheduleStart').value = st.replace(/\//g, '-').replace(' ', 'T');
+        document.getElementById('scheduleEnd').value = (result.结束日期 || '').replace(/\//g, '-').replace(' ', 'T');
+      }
+      document.getElementById('scheduleNote').value = result.备注 || '';
+      showToast(usedAI ? 'AI 已解析日程信息' : (usedLocal ? '本地规则匹配' : '已解析日程信息'), 'info');
+      break;
+  }
+}
+
+/* ===================================================================
+ *   FINANCE MANUAL
+ * =================================================================== */
+function financeManualChange() {
+  const btn = document.getElementById('financeManualBtn');
+  const amt = document.getElementById('financeAmount').value.trim();
+  const item = document.getElementById('financeItem').value.trim();
+  btn.disabled = !(amt && item);
+}
+
+function addFinanceManual() {
+  const amt = parseFloat(document.getElementById('financeAmount').value.trim());
+  const item = document.getElementById('financeItem').value.trim();
+  const cat = document.getElementById('financeCat').value;
+  const date = document.getElementById('financeDate').value.trim() || Engine._today();
+  if (!amt || !item) return showToast('请填写金额和款项', 'error');
+
+  const data = { 款项: item, 流水: amt, 日期: date, 分类: cat, 备注: '' };
+  DataManager.add('finance', data);
+  Memory.add({ userInput: item, module: 'finance', response: '已保存', data, type: 'create' });
+  
+  // Shadow learning: if last parse was AI-driven, learn the rule
+  learnFromLastSave('finance', data);
+
+  // Clear fields
+  ['financeAmount', 'financeItem', 'financeDate'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('financeManualBtn').disabled = true;
+  SyncManager.updateModuleUI('finance');
+  updateModuleBadges();
+  showToast('已暂存到本地', 'success');
+}
+
+/* ===================================================================
+ *   HABIT
+ * =================================================================== */
+const HABIT_LIST = ['睡眠', '饮食', '运动', '阅读', '输出', '语言', '技能', '计划', '情绪', '冥想'];
+
+function initHabitGrid() {
+  const grid = document.getElementById('habitGrid');
+  grid.innerHTML = HABIT_LIST.map(h => `
+    <div class="habit-item" onclick="toggleHabitDebounced(this,'${h}')">
+      <input type="checkbox" value="${h}" id="habit-cb-${h}" onclick="event.stopPropagation();toggleHabitDebounced(this.closest('.habit-item'), '${h}');return false;">
+      <label for="habit-cb-${h}" style="cursor:pointer;font-size:14px;">${h}</label>
+    </div>`).join('');
+  refreshHabitGrid();
+}
+
+function refreshHabitGrid() {
+  // Load existing pending habits for the selected date into the grid
+  const date = document.getElementById('habitDate').value;
+  const existing = DataManager.getAll('habit').find(r =>
+    r.data.日期 === date && r.syncStatus === 'pending'
+  );
+  document.querySelectorAll('#habitGrid input[type="checkbox"]').forEach(cb => {
+    cb.checked = false;
+    cb.closest('.habit-item')?.classList.remove('checked');
+  });
+  if (existing && Array.isArray(existing.data.habits)) {
+    existing.data.habits.forEach(h => {
+      const cb = document.getElementById('habit-cb-' + h);
+      if (cb) { cb.checked = true; cb.closest('.habit-item')?.classList.add('checked'); }
+    });
+  }
+}
+
+let _habitDebounceTimer = null;
+function toggleHabitDebounced(el, habit) {
+  const cb = el.querySelector('input');
+  const wasChecked = cb.checked;
+  cb.checked = !wasChecked;
+  el.classList.toggle('checked', !wasChecked);
+  // Debounce save to prevent rapid-fire writes
+  clearTimeout(_habitDebounceTimer);
+  _habitDebounceTimer = setTimeout(() => saveHabitImmediate(), 150);
+}
+
+function toggleHabit(el, habit) {
+  toggleHabitDebounced(el, habit);
+}
+
+function saveHabitImmediate() {
+  const date = document.getElementById('habitDate').value;
+  const checked = Array.from(document.querySelectorAll('#habitGrid input:checked')).map(cb => cb.value);
+
+  // Find existing pending record for this date
+  const existing = DataManager.getAll('habit').find(r =>
+    r.data.日期 === date && r.syncStatus === 'pending'
+  );
+
+  if (existing) {
+    if (checked.length === 0) {
+      // All unchecked — remove the pending record
+      DataManager.remove('habit', existing.id);
+    } else {
+      DataManager.update('habit', existing.id, { habits: checked });
+    }
+  } else {
+    if (checked.length > 0) {
+      DataManager.add('habit', { 日期: date, habits: checked });
+    }
+  }
+
+  SyncManager.updateModuleUI('habit');
+  updateModuleBadges();
+}
+
+/* ===================================================================
+ *   READING (category, manual add)
+ * =================================================================== */
+const READING_CATS = ['工具库', '技术技能', '商业经济', '认知思维', '历史社会', '自然科学', '文学叙事'];
+let selectedReadingCat = '认知思维';
+
+function initReadingCatRow() {
+  const row = document.getElementById('readingCatRow');
+  row.innerHTML = READING_CATS.map(c => `<span class="cat-chip${c === selectedReadingCat ? ' selected' : ''}" onclick="selectReadingCat('${c}')">${c}</span>`).join('');
+}
+
+function selectReadingCat(cat) {
+  selectedReadingCat = cat;
+  document.querySelectorAll('#readingCatRow .cat-chip').forEach(el => el.classList.toggle('selected', el.textContent === cat));
+  readingPreviewRefresh();
+}
+
+function updateReadingCat(cat) { if (cat && READING_CATS.includes(cat)) selectReadingCat(cat); }
+
+function readingPreviewRefresh() {
+  const title = document.getElementById('readingTitle')?.value?.trim();
+  const btn = document.getElementById('readingManualBtn');
+  if (btn) btn.disabled = !title;
+}
+
+function addReadingManual() {
+  const title = document.getElementById('readingTitle').value.trim();
+  if (!title) { showToast('请输入书名', 'error'); return; }
+  const wordCount = parseInt(document.getElementById('readingWordCount').value) || 0;
+  const readingQuestion = document.getElementById('readingQuestion').value.trim();
+  const data = {
+    书名: title,
+    类目: selectedReadingCat,
+    阅读方式: document.getElementById('readingMethod').value,
+    进度: document.getElementById('readingProgress').value,
+    开始日期: document.getElementById('readingDate').value,
+    感悟: document.getElementById('readingNote').value.trim(),
+    字数: wordCount,
+    阅读提问: readingQuestion || ''
+  };
+  DataManager.add('reading', data);
+  Memory.add({ userInput: title, module: 'reading', response: '已保存', data, type: 'create' });
+  learnFromLastSave('reading', data);
+  document.getElementById('readingInput').value = '';
+  document.getElementById('readingTitle').value = '';
+  document.getElementById('readingNote').value = '';
+  document.getElementById('readingWordCount').value = '';
+  document.getElementById('readingQuestion').value = '';
+  document.getElementById('readingManualBtn').disabled = true;
+  SyncManager.updateModuleUI('reading');
+  updateModuleBadges();
+  showToast('已暂存到本地', 'success');
+}
+
+/* ===================================================================
+ *   DIARY MANUAL
+ * =================================================================== */
+function addDiaryManual() {
+  const one = document.getElementById('diaryOne').value.trim();
+  if (!one) { showToast('请至少填写一句话', 'error'); return; }
+  const data = {
+    日期: document.getElementById('diaryDate').value || Engine._today().replace(/\//g, '-'),
+    能量: document.getElementById('diaryEnergy').value,
+    今日情绪: document.getElementById('diaryMood').value.trim(),
+    今日收获: document.getElementById('diaryGain').value.trim(),
+    关键复盘: document.getElementById('diaryReview').value.trim(),
+    一句话: one
+  };
+  DataManager.add('diary', data);
+  Memory.add({ userInput: one, module: 'diary', response: '已保存', data, type: 'create' });
+  learnFromLastSave('diary', data);
+  ['diaryMood', 'diaryGain', 'diaryReview', 'diaryOne'].forEach(id => document.getElementById(id).value = '');
+  SyncManager.updateModuleUI('diary');
+  updateModuleBadges();
+  showToast('日记已暂存到本地', 'success');
+}
+// Auto-enable diary button
+setInterval(() => {
+  const btn = document.getElementById('diaryManualBtn');
+  if (btn) btn.disabled = !document.getElementById('diaryOne').value.trim();
+}, 500);
+
+/* ===================================================================
+ *   SCHEDULE MANUAL
+ * =================================================================== */
+function addScheduleManual() {
+  const title = document.getElementById('scheduleTitle').value.trim();
+  if (!title) { showToast('请输入日程标题', 'error'); return; }
+  const data = {
+    记录标题: title,
+    开始日期: document.getElementById('scheduleStart').value,
+    结束日期: document.getElementById('scheduleEnd').value,
+    同步日历: true,
+    备注: document.getElementById('scheduleNote').value.trim()
+  };
+  DataManager.add('schedule', data);
+  Memory.add({ userInput: title, module: 'schedule', response: '已保存', data, type: 'create' });
+  learnFromLastSave('schedule', data);
+  ['scheduleTitle', 'scheduleNote'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('scheduleStart').value = '';
+  document.getElementById('scheduleEnd').value = '';
+  SyncManager.updateModuleUI('schedule');
+  updateModuleBadges();
+  showToast('日程已暂存到本地', 'success');
+}
+// Auto-enable schedule button
+setInterval(() => {
+  const btn = document.getElementById('scheduleManualBtn');
+  if (btn) btn.disabled = !document.getElementById('scheduleTitle').value.trim();
+}, 500);
+
+/* ===================================================================
+ *   PER-MODULE SYNC
+ * =================================================================== */
+async function syncSingleModule(module) {
+  const btn = document.getElementById('modSyncBtn-' + module);
+  if (btn) { btn.disabled = true; btn.textContent = '同步中...'; }
+
+  const result = await SyncManager.syncModule(module);
+
+  if (btn) { btn.textContent = '立即同步'; }
+  updateModuleBadges();
+  SyncManager.updateModuleUI(module);
+}
+
+/* ===================================================================
+ *   SETTINGS
+ * =================================================================== */
+function openSettings() {
+  document.getElementById('settingsModal').classList.remove('hidden');
+  document.getElementById('cfgAppId').value = cfg.appId || '';
+  document.getElementById('cfgAppSecret').value = cfg.appSecret || '';
+  document.getElementById('cfgBaseToken').value = cfg.baseToken || '';
+  document.getElementById('cfgTableBill').value = cfg.tables.bill || '';
+  document.getElementById('cfgTableHabit').value = cfg.tables.habit || '';
+  document.getElementById('cfgTableRead').value = cfg.tables.read || '';
+  document.getElementById('cfgTableDiary').value = cfg.tables.diary || '';
+  document.getElementById('cfgTableDay').value = cfg.tables.day || '';
+  document.getElementById('cfgAiEnabled').value = (cfg.ai && cfg.ai.enabled) ? '1' : '0';
+  document.getElementById('cfgAiBaseUrl').value = (cfg.ai && cfg.ai.baseUrl) || '';
+  document.getElementById('cfgAiKey').value = (cfg.ai && cfg.ai.key) || '';
+  document.getElementById('cfgAiModel').value = (cfg.ai && cfg.ai.model) || '';
+  updateStorageHealth();
+}
+
+function closeSettings() { document.getElementById('settingsModal').classList.add('hidden'); }
+
+function saveSettings() {
+  cfg.appId = document.getElementById('cfgAppId').value.trim();
+  cfg.appSecret = document.getElementById('cfgAppSecret').value.trim();
+  cfg.baseToken = document.getElementById('cfgBaseToken').value.trim();
+  cfg.tables.bill = document.getElementById('cfgTableBill').value.trim();
+  cfg.tables.habit = document.getElementById('cfgTableHabit').value.trim();
+  cfg.tables.read = document.getElementById('cfgTableRead').value.trim();
+  cfg.tables.diary = document.getElementById('cfgTableDiary').value.trim();
+  cfg.tables.day = document.getElementById('cfgTableDay').value.trim();
+  if (!cfg.ai) cfg.ai = {};
+  cfg.ai.enabled = document.getElementById('cfgAiEnabled').value === '1';
+  cfg.ai.baseUrl = document.getElementById('cfgAiBaseUrl').value.trim() || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
+  cfg.ai.key = document.getElementById('cfgAiKey').value.trim();
+  cfg.ai.model = document.getElementById('cfgAiModel').value.trim() || 'qwen-3.7';
+  saveConfigObj(cfg);
+  closeSettings();
+  showToast('配置已保存', 'success');
+  FeishuAPI._token = null;
+  FeishuAPI._tokenExpires = 0;
+  checkConnection();
+}
+
+function updateStorageHealth() {
+  const el = document.getElementById('storageHealth');
+  if (!el) return;
+  let msgs = [];
+  try {
+    const cfgRaw = localStorage.getItem(STORAGE_KEY);
+    const hasCfg = !!(cfgRaw && JSON.parse(cfgRaw).appId);
+    msgs.push(`localStorage: ${hasCfg ? '有配置' : '无配置'}`);
+  } catch { msgs.push('localStorage: 异常'); }
+  try {
+    let total = 0;
+    for (const m of ['finance','habit','reading','diary','schedule']) {
+      const d = DataManager.getAll(m);
+      total += d.length;
+    }
+    msgs.push(`本地记录: ${total} 条`);
+  } catch { msgs.push('本地记录: 异常'); }
+  el.textContent = msgs.join(' | ');
+}
+
+async function exportData() {
+  try {
+    const payload = {
+      config: cfg,
+      data: {},
+      memory: Memory.getAll(),
+      exportedAt: new Date().toISOString(),
+      version: 2
+    };
+    for (const m of ['finance', 'habit', 'reading', 'diary', 'schedule']) {
+      payload.data[m] = DataManager.getAll(m);
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pms_backup_${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('数据已导出', 'success');
+  } catch (e) {
+    showToast('导出失败: ' + e.message, 'error');
+  }
+}
+
+async function importData(input) {
+  const file = input.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const payload = JSON.parse(text);
+    if (!payload.config && !payload.data) throw new Error('文件格式不正确');
+    if (payload.config) {
+      cfg = { ...cfg, ...payload.config };
+      saveConfigObj(cfg);
+    }
+    if (payload.data) {
+      for (const [m, recs] of Object.entries(payload.data)) {
+        if (Array.isArray(recs)) {
+          localStorage.setItem(DataManager._key(m), JSON.stringify(recs));
+          DBBackup.setData(m, recs);
+        }
+      }
+    }
+    if (payload.memory && Array.isArray(payload.memory)) {
+      localStorage.setItem(MEMORY_KEY, JSON.stringify(payload.memory));
+      DBBackup.setMemory(payload.memory);
+    }
+    showToast('数据已导入，即将刷新', 'success');
+    setTimeout(() => location.reload(), 800);
+  } catch (e) {
+    showToast('导入失败: ' + e.message, 'error');
+  } finally {
+    input.value = '';
+  }
+}
+
+/* ===================================================================
+ *   CONNECTION CHECK
+ * =================================================================== */
+async function checkConnection() {
+  const st = document.getElementById('connStatus');
+  if (!hasCredentials()) { st.textContent = '未配置'; st.style.color = 'var(--orange)'; return false; }
+  try {
+    await FeishuAPI.getToken();
+    st.textContent = '已连接';
+    st.style.color = 'var(--green)';
+    return true;
+  } catch (e) {
+    st.textContent = '连接失败';
+    st.style.color = 'var(--red)';
+    console.error('Feishu connection failed:', e);
+    // Show detailed error after a short delay so UI updates first
+    setTimeout(() => {
+      showToast('飞书连接失败: ' + e.message, 'error', 8000);
+    }, 300);
+    return false;
+  }
+}
+
+/* ===================================================================
+ *   MEMORY MODAL
+ * =================================================================== */
+function openMemory() {
+  document.getElementById('memoryModal').classList.remove('hidden');
+  const all = Memory.getAll().reverse();
+  const content = document.getElementById('memoryContent');
+  if (all.length === 0) {
+    content.innerHTML = '<div style="text-align:center;color:var(--sub);padding:20px;">暂无记忆记录</div>';
+    return;
+  }
+  content.innerHTML = all.slice(0, 100).map(m => {
+    const d = new Date(m.timestamp);
+    const ds = `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    return `<div style="padding:8px;border-bottom:1px solid var(--gray);font-size:12px;line-height:1.5;">
+      <span style="color:var(--sub);">${ds}</span> · <strong>${esc(m.module||'')}</strong><br>
+      ${esc(m.userInput||m.response||'')}
+    </div>`;
+  }).join('');
+}
+
+function closeMemory() { document.getElementById('memoryModal').classList.add('hidden'); }
+
+function clearMemory() {
+  if (!confirm('确定清空全部记忆吗？')) return;
+  Memory.clear();
+  closeMemory();
+  showToast('记忆已清空', 'info');
+}
+
+/* ===================================================================
+ *   SIDEBAR MOBILE
+ * =================================================================== */
+function toggleSidebar() {
+  const sb = document.getElementById('sidebar');
+  const bd = document.getElementById('sidebarBackdrop');
+  sb.classList.toggle('open');
+  bd.classList.toggle('show', sb.classList.contains('open'));
+}
+
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarBackdrop').classList.remove('show');
+}
+
+/* ===================================================================
+ *   SHADOW LEARNING — auto-learn rules from confirmed saves
+ * =================================================================== */
+let _lastAiParseText = null;
+let _lastAiParseResult = null;
+
+function learnFromLastSave(module, data) {
+  // Only learn if we have a recent AI parse for this module
+  if (_lastAiParseText && _lastAiParseResult && _lastAiParseResult.module === module) {
+    LocalRules.learn(_lastAiParseText, _lastAiParseResult);
+    _lastAiParseText = null;
+    _lastAiParseResult = null;
+  }
+}
+
+/* ===================================================================
+ *   INIT
+ * =================================================================== */
+(async function init() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  // Initialize local rules engine
+  LocalRules.init();
+
+  // Initialize debug panel
+  Debug.init();
+
+  // Log voice diagnostic results
+  Debug.log('协议: ' + location.protocol + ', 安全上下文: ' + window.isSecureContext, 'info');
+  if (!SR) {
+    Debug.log('⚠️ SpeechRecognition API 不可用（需 Chrome/Edge + 本地服务器）', 'warn');
+  }
+
+  // Load config with IndexedDB fallback
+  try {
+    const loaded = await loadConfig();
+    if (loaded) cfg = loaded;
+  } catch (e) { console.warn('Config load failed:', e); }
+
+  // On first visit, auto-open settings
+  if (!hasCredentials()) {
+    cfg.tables = { ...DEFAULT_TABLES };
+  }
+  migrateConfig();
+
+  // Warn if opened via file://
+  if (location.protocol === 'file:') {
+    showToast('警告：通过 file:// 打开时浏览器可能限制网络请求并清空数据，建议使用本地服务器访问', 'error', 8000);
+  }
+
+  // Restore data from IndexedDB if localStorage is empty
+  try {
+    for (const m of ['finance', 'habit', 'reading', 'diary', 'schedule']) {
+      const restored = await DataManager.restoreFromDB(m);
+      if (restored) console.log(`[Restore] ${m} data recovered from IndexedDB`);
+    }
+    const memRestored = await Memory.restoreFromDB();
+    if (memRestored) console.log('[Restore] Memory recovered from IndexedDB');
+  } catch (e) { console.warn('DB restore failed:', e); }
+
+  // Textarea auto-resize
+  document.querySelectorAll('textarea').forEach(ta => {
+    ta.addEventListener('input', () => {
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(ta.scrollHeight, 100) + 'px';
+    });
+  });
+
+  // Reading auto-parse on input (debounced)
+  let _readingDebounce = null;
+  const ri = document.getElementById('readingInput');
+  if (ri) {
+    ri.addEventListener('input', () => {
+      clearTimeout(_readingDebounce);
+      _readingDebounce = setTimeout(() => {
+        const text = ri.value.trim();
+        if (text.length < 2) return;
+        const result = Engine.parseReading(text);
+        if (result) {
+          document.getElementById('readingTitle').value = result.书名 || '';
+          document.getElementById('readingMethod').value = result.阅读方式 || '';
+          document.getElementById('readingProgress').value = result.进度 || '在读';
+          document.getElementById('readingDate').value = (result.开始日期 || new Date().toISOString().split('T')[0]).replace(/\//g, '-');
+          document.getElementById('readingNote').value = result.感悟 || '';
+          if (result.字数) document.getElementById('readingWordCount').value = result.字数;
+          if (result.阅读提问) document.getElementById('readingQuestion').value = result.阅读提问;
+          updateReadingCat(result.类目);
+          readingPreviewRefresh();
+        }
+      }, 500);
+    });
+  }
+
+  // Date defaults
+  const today = new Date().toISOString().split('T')[0];
+  const now = new Date();
+  const nowStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  document.getElementById('habitDate').value = today;
+  document.getElementById('readingDate').value = today;
+  document.getElementById('diaryDate').value = today;
+  document.getElementById('scheduleStart').value = `${today}T${nowStr}`;
+
+  initHabitGrid();
+  initReadingCatRow();
+
+  // Check credentials
+  if (!hasCredentials()) {
+    showToast('请先配置飞书凭据（点击左下角 ⚙️ 设置）', 'error');
+    setTimeout(() => openSettings(), 1500);
+  } else {
+    checkConnection();
+  }
+
+  // Restore pre-config table IDs
+  if (!cfg.tables || !cfg.tables.bill) { cfg.tables = { ...DEFAULT_TABLES }; saveConfigObj(cfg); }
+
+  // Default module
+  switchModule('finance');
+
+  // Mobile setup
+  if (window.innerWidth <= 768) {
+    document.getElementById('mobileNavToggle').style.display = 'flex';
+  }
+  window.addEventListener('resize', () => {
+    if (window.innerWidth > 768) {
+      document.getElementById('sidebar').classList.remove('open');
+      document.getElementById('sidebarBackdrop').classList.remove('show');
+      document.getElementById('mobileNavToggle').style.display = 'none';
+    } else {
+      document.getElementById('mobileNavToggle').style.display = 'flex';
+    }
+  });
+
+  // Check sync bar periodically
+  setInterval(() => {
+    updateModuleBadges();
+    ['finance', 'habit', 'reading', 'diary', 'schedule'].forEach(m => {
+      SyncManager.updateModuleUI(m);
+    });
+  }, 5000);
+
+  console.log('✅ 个人管理系统 v2.0 已就绪');
+  console.log('   DataManager: localStorage 本地优先');
+  console.log('   SyncManager: 批量同步 + 防重');
+  console.log('   LocalRules: 本地规则引擎已就绪');
+  console.log('   Debug: 调试面板可用 (右下角 🔍)');
+  console.log('   模块: 记一笔账 | 习惯打卡 | 阅读记录 | 写日记 | 日程安排');
+  Debug.log('系统启动完成 v2.0', 'ok');
+  Debug.log(`本地规则: ${LocalRules.getAll().length} 条`, 'rule');
+  Debug.log('AI: ' + (cfg.ai && cfg.ai.enabled ? '已启用' : '未启用'), 'info');
+})();
+</script>
+<!-- ====== Debug DevTools ====== -->
+<button class="debug-toggle" id="debugToggle" onclick="Debug.toggle()" title="调试面板">🔍</button>
+<div class="debug-panel" id="debugPanel">
+  <div class="debug-header">
+    <h4>🔧 调试控制台</h4>
+    <button style="border:none;background:none;cursor:pointer;font-size:16px;color:var(--sub);" onclick="Debug.close()">✕</button>
+  </div>
+  <div class="debug-tabs">
+    <button class="debug-tab active" data-tab="logs" onclick="Debug.switchTab('logs')">📋 日志</button>
+    <button class="debug-tab" data-tab="rules" onclick="Debug.switchTab('rules')">📐 本地规则</button>
+  </div>
+  <div class="debug-content" id="debugContent">
+    <div id="debugLogs"></div>
+    <div id="debugRules" class="hidden"></div>
+  </div>
+</div>
+
+</body>
+</html>
