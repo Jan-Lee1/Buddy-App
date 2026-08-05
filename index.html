@@ -463,7 +463,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
     <label>API Key</label>
     <input type="password" id="cfgAiKey" placeholder="sk-...">
     <label>模型名称</label>
-    <input type="text" id="cfgAiModel" placeholder="qwen-3.7">
+    <input type="text" id="cfgAiModel" placeholder="qwen3.7-max">
 
     <h3 style="font-size:14px;margin:18px 0 8px;color:var(--sub);">📋 飞书配置</h3>
     <label>飞书 App ID <span style="color:var(--red)">*</span></label>
@@ -1300,7 +1300,7 @@ const AIClient = {
     // If running on localhost, route through our server proxy
     // which reads DASHSCOPE_API_KEY from environment variable (no hardcoded key)
     if (this._isLocalhost) {
-      const model = aiCfg.model || 'qwen-3.7';
+      const model = aiCfg.model || 'qwen3.7-max';
       const resp = await fetch('/api/dashscope/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1388,161 +1388,194 @@ async function aiParseInput(text, currentModule) {
 }
 
 /* ===================================================================
- *   VOICE INPUT
+ *   VOICE INPUT — MediaRecorder + DashScope Paraformer 转写
+ *   方案：前端录音 → 上传音频 → 后端调用 Paraformer → 返回文本
+ *   手机端、PC 端均兼容（需要 HTTPS 或 localhost）
  * =================================================================== */
 const Voice = {
-  _rec: null,
+  _mediaStream: null,
+  _mediaRecorder: null,
   _activeModule: null,
-  _finalTranscript: '',
-  _interimTranscript: '',
+  _chunks: [],
+  _onResult: null,
   _stoppedByUser: false,
-  _restartTimer: null,
-  supported: ('webkitSpeechRecognition' in window) || ('SpeechRecognition' in window),
+  _maxDuration: 30000,
+  _timer: null,
+  supported: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
 
-  // Create a fresh SpeechRecognition instance every time
-  _createRec() {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return null;
-    const rec = new SR();
-    rec.lang = 'zh-CN';
-    rec.continuous = true;
-    rec.interimResults = true;
-    return rec;
-  },
-
-  start(module, onResult) {
+  async start(module, onResult) {
+    // HTTPS or localhost required for getUserMedia
     if (!this.supported) {
-      showToast('当前浏览器不支持语音输入（需要 Chrome/Edge 浏览器）', 'error', 5000);
+      showToast('当前浏览器不支持录音功能（请使用 HTTPS 或 localhost 访问）', 'error', 5000);
       return;
     }
 
     this._cleanup();
-
     this._stoppedByUser = false;
     this._activeModule = module;
-    this._finalTranscript = '';
-    this._interimTranscript = '';
-
-    const rec = this._createRec();
-    if (!rec) { showToast('语音服务不可用', 'error'); return; }
-    this._rec = rec;
+    this._chunks = [];
+    this._onResult = onResult;
 
     if (module === 'finance') Cart.clear();
     const input = document.getElementById(module + 'Input');
-    if (input) input.value = '';
+    if (input) input.value = '🎙️ 录音中...';
 
-    rec.onresult = (e) => {
-      let interim = '';
-      for (let i = e.resultIndex; i < e.results.length; ++i) {
-        if (e.results[i].isFinal) {
-          this._finalTranscript += e.results[i][0].transcript;
-        } else {
-          interim += e.results[i][0].transcript;
-        }
-      }
-      this._interimTranscript = interim;
-      if (input) {
-        input.value = this._finalTranscript + this._interimTranscript;
-        input.style.height = 'auto';
-        input.style.height = input.scrollHeight + 'px';
-      }
-    };
+    try {
+      this._mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-    rec.onerror = (e) => {
-      if (e.error === 'no-speech') {
-        // No speech detected — auto restart after short delay
-        if (!this._stoppedByUser) {
-          clearTimeout(this._restartTimer);
-          this._restartTimer = setTimeout(() => {
-            if (!this._stoppedByUser && this._rec === rec) {
-              try { rec.start(); } catch (err) {}
+      // 选择兼容性最好的 MIME 类型
+      let mimeType = 'audio/webm;codecs=opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'audio/webm';
+        if (!MediaRecorder.isTypeSupported(mimeType)) {
+          mimeType = 'audio/mp4';
+          if (!MediaRecorder.isTypeSupported(mimeType)) {
+            mimeType = 'audio/ogg;codecs=opus';
+            if (!MediaRecorder.isTypeSupported(mimeType)) {
+              mimeType = ''; // 浏览器默认
             }
-          }, 300);
-        }
-        return;
-      }
-      if (e.error === 'aborted') return;
-      if (e.error === 'not-allowed') {
-        showToast('麦克风权限被拒绝，请在浏览器设置中允许麦克风访问', 'error', 6000);
-        this._stopHighlight(module);
-        this._cleanup();
-        return;
-      }
-      if (e.error === 'audio-capture') {
-        showToast('未检测到麦克风设备', 'error');
-        this._stopHighlight(module);
-        this._cleanup();
-        return;
-      }
-      showToast('语音识别故障: ' + e.error, 'error');
-    };
-
-    rec.onend = () => {
-      if (this._stoppedByUser) {
-        // User clicked stop — don't restart, deliver results
-        this._stopHighlight(module);
-        const finalText = (this._finalTranscript || this._interimTranscript || '').trim();
-        if (onResult && finalText) onResult(finalText);
-        this._cleanup();
-        return;
-      }
-      // Browser auto-ended (silence / timeout) — restart automatically
-      const btn = document.querySelector(`.voice-btn[data-module="${module}"]`);
-      if (btn && btn.classList.contains('recording')) {
-        clearTimeout(this._restartTimer);
-        this._restartTimer = setTimeout(() => {
-          if (!this._stoppedByUser && this._rec === rec) {
-            try { rec.start(); } catch (err) {}
           }
-        }, 100);
-      } else {
+        }
+      }
+      Debug.log('📻 使用音频编码: ' + (mimeType || '浏览器默认'), 'info');
+
+      const opts = mimeType ? { mimeType } : {};
+      this._mediaRecorder = new MediaRecorder(this._mediaStream, opts);
+
+      this._mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) this._chunks.push(e.data);
+      };
+
+      this._mediaRecorder.onerror = (e) => {
+        Debug.log('❌ 录音器错误: ' + (e.error?.message || '未知错误'), 'error');
+        showToast('录音设备故障，请重试', 'error');
         this._stopHighlight(module);
-        const finalText = (this._finalTranscript || this._interimTranscript || '').trim();
-        if (onResult && finalText) onResult(finalText);
         this._cleanup();
-      }
-    };
+      };
 
-    this._highlight(module);
+      this._mediaRecorder.onstop = () => {
+        this._processRecording();
+      };
 
-    setTimeout(() => {
-      if (this._rec === rec && !this._stoppedByUser) {
-        try { 
-          rec.start(); 
+      this._mediaRecorder.start(200); // 每 200ms 收集一次数据
+      this._highlight(module);
+
+      // 最大录音时长自动停止
+      this._timer = setTimeout(() => {
+        if (!this._stoppedByUser && this._mediaRecorder && this._mediaRecorder.state === 'recording') {
+          showToast('录音已达最大时长(30秒)，正在转写...', 'info');
+          this._stoppedByUser = true;
+          this._mediaRecorder.stop();
         }
-        catch (err) {
-          console.error('[Voice] rec.start() failed:', err.message, err.name);
-          Debug.log('❌ 语音启动失败: ' + err.message, 'error');
-          showToast('语音启动失败，请重试', 'error');
-          this._stopHighlight(module);
-          this._cleanup();
-        }
+      }, this._maxDuration);
+
+      Debug.log('✅ 录音已开始', 'ok');
+    } catch (err) {
+      console.error('[Voice] getUserMedia failed:', err.message, err.name);
+      Debug.log('❌ 麦克风访问失败: ' + err.message, 'error');
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        showToast('麦克风权限被拒绝，请在浏览器设置中允许麦克风访问', 'error', 6000);
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        showToast('未检测到麦克风设备', 'error');
       } else {
-        console.log('[Voice] Start cancelled: rec changed or stopped by user');
+        showToast('录音启动失败: ' + err.message, 'error');
       }
-    }, 80);
+      this._stopHighlight(module);
+      if (input) input.value = '';
+      this._cleanup();
+    }
   },
 
   stop() {
     this._stoppedByUser = true;
-    clearTimeout(this._restartTimer);
+    clearTimeout(this._timer);
     if (this._activeModule) this._stopHighlight(this._activeModule);
-    if (this._rec) {
-      try { this._rec.abort(); } catch (e) {}
+    if (this._mediaRecorder && this._mediaRecorder.state === 'recording') {
+      this._mediaRecorder.stop();
+    } else if (this._mediaRecorder) {
+      // Already stopping or stopped
+    } else {
+      this._cleanup();
     }
-    // Cleanup happens in onend
   },
 
-  // Release the current recognition instance completely
-  _cleanup() {
-    clearTimeout(this._restartTimer);
-    if (this._rec) {
-      this._rec.onresult = null;
-      this._rec.onerror = null;
-      this._rec.onend = null;
-      try { this._rec.abort(); } catch (e) {}
-      this._rec = null;
+  async _processRecording() {
+    const module = this._activeModule;
+    if (!module) { this._cleanup(); return; }
+
+    const input = document.getElementById(module + 'Input');
+
+    if (!this._chunks.length || this._chunks.reduce((s, c) => s + c.size, 0) < 100) {
+      Debug.log('⚠️ 未录到有效音频 (数据过小)', 'warn');
+      showToast('未录到音频，请长按录音按钮并说话', 'error', 3000);
+      this._stopHighlight(module);
+      if (input) input.value = '';
+      this._cleanup();
+      return;
     }
+
+    const mimeType = this._mediaRecorder?.mimeType || 'audio/webm';
+    const blob = new Blob(this._chunks, { type: mimeType });
+    this._chunks = [];
+
+    Debug.log(`📤 发送音频 ${(blob.size / 1024).toFixed(1)}KB 到转写接口 (${mimeType})`, 'info');
+    if (input) input.value = '⏳ 正在语音转写...';
+    showToast('正在转写语音...', 'info', 2000);
+
+    try {
+      const formData = new FormData();
+      let ext = 'webm';
+      if (mimeType.includes('mp4') || mimeType.includes('mp4a')) ext = 'm4a';
+      else if (mimeType.includes('ogg')) ext = 'ogg';
+      else if (mimeType.includes('wav')) ext = 'wav';
+      formData.append('file', blob, `recording.${ext}`);
+
+      const resp = await fetch('/api/transcribe', {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!resp.ok) {
+        let msg = `服务器错误 ${resp.status}`;
+        try { const j = await resp.json(); msg = j.error?.message || j.error || msg; } catch {}
+        throw new Error(msg);
+      }
+
+      const result = await resp.json();
+      const text = (result.text || result.output?.text || '').trim();
+
+      if (!text) {
+        Debug.log('⚠️ 转写返回空文本', 'warn');
+        showToast('未识别到语音内容，请清晰说话后重试', 'error');
+        if (input) input.value = '';
+      } else {
+        Debug.log(`✅ 转写成功: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`, 'ok');
+        if (input) input.value = text;
+        if (this._onResult) this._onResult(text);
+      }
+    } catch (err) {
+      console.error('[Voice] Transcription failed:', err);
+      Debug.log('❌ 语音转写失败: ' + err.message, 'error');
+      showToast('语音转写失败: ' + err.message, 'error', 4000);
+      if (input) input.value = '';
+    }
+
+    this._cleanup();
+  },
+
+  _cleanup() {
+    clearTimeout(this._timer);
+    if (this._mediaRecorder && this._mediaRecorder.state !== 'inactive') {
+      try { this._mediaRecorder.stop(); } catch (e) {}
+    }
+    if (this._mediaStream) {
+      this._mediaStream.getTracks().forEach(t => t.stop());
+      this._mediaStream = null;
+    }
+    this._mediaRecorder = null;
+    this._chunks = [];
+    this._activeModule = null;
+    this._onResult = null;
   },
 
   _highlight(module) {
@@ -2423,9 +2456,9 @@ function openSettings() {
   document.getElementById('cfgTableDiary').value = cfg.tables.diary || '';
   document.getElementById('cfgTableDay').value = cfg.tables.day || '';
   document.getElementById('cfgAiEnabled').value = (cfg.ai && cfg.ai.enabled) ? '1' : '0';
-  document.getElementById('cfgAiBaseUrl').value = (cfg.ai && cfg.ai.baseUrl) || '';
+  document.getElementById('cfgAiBaseUrl').value = (cfg.ai && cfg.ai.baseUrl) || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
   document.getElementById('cfgAiKey').value = (cfg.ai && cfg.ai.key) || '';
-  document.getElementById('cfgAiModel').value = (cfg.ai && cfg.ai.model) || '';
+  document.getElementById('cfgAiModel').value = (cfg.ai && cfg.ai.model) || 'qwen3.7-max';
   updateStorageHealth();
 }
 
@@ -2444,7 +2477,7 @@ function saveSettings() {
   cfg.ai.enabled = document.getElementById('cfgAiEnabled').value === '1';
   cfg.ai.baseUrl = document.getElementById('cfgAiBaseUrl').value.trim() || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
   cfg.ai.key = document.getElementById('cfgAiKey').value.trim();
-  cfg.ai.model = document.getElementById('cfgAiModel').value.trim() || 'qwen-3.7';
+  cfg.ai.model = document.getElementById('cfgAiModel').value.trim() || 'qwen3.7-max';
   saveConfigObj(cfg);
   closeSettings();
   showToast('配置已保存', 'success');
