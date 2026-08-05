@@ -28,11 +28,16 @@ module.exports = async function handler(req, res) {
     return;
   }
 
+  if (!req.body || typeof req.body !== 'object') {
+    res.status(400).json({ error: { message: '请求体不能为空' } });
+    return;
+  }
+
   try {
     const body = JSON.stringify(req.body);
 
-    const result = await new Promise((resolve, reject) => {
-      const options = {
+    await new Promise((resolve, reject) => {
+      const proxyReq = https.request({
         hostname: DASHSCOPE_HOST,
         port: 443,
         path: '/compatible-mode/v1/chat/completions',
@@ -42,15 +47,13 @@ module.exports = async function handler(req, res) {
           'Authorization': 'Bearer ' + DASHSCOPE_API_KEY,
           'Content-Length': String(Buffer.byteLength(body)),
         },
-        timeout: 60000,
-      };
-
-      const proxyReq = https.request(options, (proxyRes) => {
+        timeout: 55000,
+      }, (proxyRes) => {
         let data = '';
         proxyRes.on('data', (chunk) => { data += chunk; });
         proxyRes.on('end', () => {
-          console.log(`[DashScope] Response ${proxyRes.statusCode}`);
-          res.status(proxyRes.statusCode);
+          console.log(`[DashScope Vercel] ${proxyRes.statusCode} (${data.length} bytes)`);
+          res.status(proxyRes.statusCode || 200);
           res.setHeader('Content-Type', 'application/json; charset=utf-8');
           res.end(data);
           resolve();
@@ -58,19 +61,22 @@ module.exports = async function handler(req, res) {
       });
 
       proxyReq.on('error', (err) => {
+        console.error('[DashScope Vercel] 连接错误:', err.message);
         reject(err);
       });
 
       proxyReq.on('timeout', () => {
         proxyReq.destroy();
-        reject(new Error('DashScope 连接超时'));
+        reject(new Error('DashScope API 请求超时'));
       });
 
       proxyReq.write(body);
       proxyReq.end();
     });
   } catch (err) {
-    console.error('[DashScope Error]', err.message);
-    res.status(502).json({ error: { message: 'DashScope 代理连接失败: ' + err.message } });
+    console.error('[DashScope Vercel] 代理失败:', err.message);
+    if (!res.headersSent) {
+      res.status(502).json({ error: { message: 'DashScope 代理失败: ' + err.message } });
+    }
   }
 };

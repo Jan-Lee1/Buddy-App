@@ -1,7 +1,7 @@
 /**
  * Vercel Serverless: 飞书 API 代理（catch-all）
  * /api/* → open.feishu.cn/open-apis/*
- * 注意：具体路由如 /api/transcribe, /api/dashscope/chat/completions 优先于此 catch-all
+ * 注意：具体路由如 /api/transcribe, /api/dashscope/chat/completions, /api/feishu/token 优先于此 catch-all
  */
 
 const https = require('https');
@@ -17,27 +17,28 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  // 从 Vercel 动态路由获取路径
-  const pathSegments = req.query.path;
-  const apiPath = Array.isArray(pathSegments) ? '/' + pathSegments.join('/') : '/' + (pathSegments || '');
-  const targetPath = '/open-apis' + apiPath;
-
-  // 处理原始 URL 的 query string
-  const fullUrl = req.url || '';
-  const queryIdx = fullUrl.indexOf('?');
-  const targetPathWithQuery = queryIdx !== -1 ? targetPath + fullUrl.substring(queryIdx) : targetPath;
-
-  // 构建要转发的 headers
-  const cleanHeaders = { 'host': FEISHU_HOST };
-  if (req.headers['content-type']) cleanHeaders['content-type'] = req.headers['content-type'];
-  if (req.headers['authorization']) cleanHeaders['authorization'] = req.headers['authorization'];
-
   try {
-    // 序列化请求体：如果是对象则 JSON 化，否则作为字符串
-    let bodyStr = '';
+    // 从 Vercel 动态路由获取路径
+    const pathSegments = req.query?.path;
+    const apiPath = Array.isArray(pathSegments) ? '/' + pathSegments.join('/') : '/' + (pathSegments || '');
+    const targetPath = '/open-apis' + apiPath;
+
+    // 处理原始 URL 的 query string
+    const fullUrl = req.url || '';
+    const queryIdx = fullUrl.indexOf('?');
+    const targetPathWithQuery = queryIdx !== -1 ? targetPath + fullUrl.substring(queryIdx) : targetPath;
+
+    // 构建要转发的 headers（只保留必要 header，防止 Vercel 内部 header 泄漏）
+    const cleanHeaders = { 'host': FEISHU_HOST };
+    if (req.headers['content-type']) cleanHeaders['content-type'] = req.headers['content-type'];
+    if (req.headers['authorization']) cleanHeaders['authorization'] = req.headers['authorization'];
+
+    // 序列化请求体
+    let bodyBuffer = null;
     if (req.body) {
-      bodyStr = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
-      cleanHeaders['content-length'] = String(Buffer.byteLength(bodyStr));
+      let bodyStr = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+      bodyBuffer = Buffer.from(bodyStr, 'utf8');
+      cleanHeaders['content-length'] = String(bodyBuffer.length);
     }
 
     await new Promise((resolve, reject) => {
@@ -47,44 +48,61 @@ module.exports = async function handler(req, res) {
         path: targetPathWithQuery,
         method: req.method,
         headers: cleanHeaders,
-        timeout: 30000,
+        timeout: 25000,
       };
 
       console.log(`[Feishu Vercel] ${req.method} ${targetPathWithQuery}`);
 
       const proxyReq = https.request(options, (proxyRes) => {
-        let data = '';
-        proxyRes.on('data', (chunk) => { data += chunk; });
+        const chunks = [];
 
-        // 转发响应 headers（排除 CORS 和 transfer-encoding）
-        const resHeaders = {};
-        for (const key of Object.keys(proxyRes.headers)) {
-          const lower = key.toLowerCase();
-          if (!['access-control-allow-origin', 'access-control-allow-methods',
-                'access-control-allow-headers', 'transfer-encoding'].includes(lower)) {
-            resHeaders[key] = proxyRes.headers[key];
-          }
-        }
-        resHeaders['Access-Control-Allow-Origin'] = '*';
-
-        res.writeHead(proxyRes.statusCode, resHeaders);
+        proxyRes.on('data', (chunk) => { chunks.push(chunk); });
 
         proxyRes.on('end', () => {
-          console.log(`[Feishu Vercel] Response ${proxyRes.statusCode} (${data.length} bytes)`);
-          res.end(data);
+          const dataBuffer = Buffer.concat(chunks);
+          console.log(`[Feishu Vercel] ${proxyRes.statusCode} (${dataBuffer.length} bytes)`);
+
+          // 转发响应 headers（排除内部 headers）
+          const resHeaders = {};
+          for (const key of Object.keys(proxyRes.headers)) {
+            const lower = key.toLowerCase();
+            if (!['access-control-allow-origin', 'access-control-allow-methods',
+                  'access-control-allow-headers', 'transfer-encoding',
+                  'content-encoding'].includes(lower)) {
+              resHeaders[key] = proxyRes.headers[key];
+            }
+          }
+          resHeaders['Access-Control-Allow-Origin'] = '*';
+
+          res.writeHead(proxyRes.statusCode || 200, resHeaders);
+          res.end(dataBuffer);
           resolve();
+        });
+
+        proxyRes.on('error', (err) => {
+          console.error('[Feishu Vercel] 响应错误:', err.message);
+          reject(err);
         });
       });
 
-      proxyReq.on('error', (err) => reject(err));
-      proxyReq.on('timeout', () => { proxyReq.destroy(); reject(new Error('飞书连接超时')); });
+      proxyReq.on('error', (err) => {
+        console.error('[Feishu Vercel] 连接错误:', err.message);
+        reject(err);
+      });
 
-      if (bodyStr) proxyReq.write(bodyStr);
+      proxyReq.on('timeout', () => {
+        proxyReq.destroy();
+        reject(new Error('飞书 API 连接超时'));
+      });
+
+      if (bodyBuffer) proxyReq.write(bodyBuffer);
       proxyReq.end();
     });
   } catch (err) {
-    console.error('[Feishu Vercel Error]', err.message);
-    res.status(502).json({ code: -1, msg: '飞书代理连接失败: ' + err.message });
+    console.error('[Feishu Vercel] 代理失败:', err.message);
+    if (!res.headersSent) {
+      res.status(502).json({ code: -1, msg: '飞书代理连接失败: ' + err.message });
+    }
   }
 };
 
