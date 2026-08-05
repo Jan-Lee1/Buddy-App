@@ -7,6 +7,14 @@
 
 const https = require('https');
 
+function safeSend(res, status, data) {
+  if (res.headersSent) {
+    console.warn('[Feishu Token Vercel] 响应已发送，跳过重复写入');
+    return;
+  }
+  res.status(status).json(data);
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -22,7 +30,7 @@ module.exports = async function handler(req, res) {
 
   if (!APP_ID || !APP_SECRET) {
     console.log('[Feishu Token Vercel] 未配置环境变量，返回 500');
-    res.status(500).json({
+    safeSend(res, 500, {
       code: -1,
       msg: '服务端未配置 FEISHU_APP_ID / FEISHU_APP_SECRET 环境变量'
     });
@@ -68,13 +76,14 @@ module.exports = async function handler(req, res) {
     console.log(`[Feishu Token Vercel] code=${result.code}`);
 
     if (result.code === 0) {
+      if (res.headersSent) return;
       res.status(200).send(result.data);
     } else {
       console.error('[Feishu Token Vercel] 飞书返回错误:', result.data);
-      res.status(500).json({ code: result.code || -1, msg: '飞书 API 返回错误' });
+      safeSend(res, 500, { code: result.code || -1, msg: '飞书 API 返回错误' });
     }
   } catch (err) {
     console.error('[Feishu Token Vercel] 异常:', err.message);
-    res.status(500).json({ code: -1, msg: '获取飞书 Token 失败: ' + err.message });
+    safeSend(res, 500, { code: -1, msg: '获取飞书 Token 失败: ' + err.message });
   }
 };

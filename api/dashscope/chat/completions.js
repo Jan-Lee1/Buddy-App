@@ -8,6 +8,14 @@ const https = require('https');
 const DASHSCOPE_HOST = 'dashscope.aliyuncs.com';
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || '';
 
+function safeSend(res, status, data) {
+  if (res.headersSent) {
+    console.warn('[DashScope Vercel] 响应已发送，跳过重复写入');
+    return;
+  }
+  res.status(status).json(data);
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -19,17 +27,17 @@ module.exports = async function handler(req, res) {
   }
 
   if (req.method !== 'POST') {
-    res.status(405).json({ error: { message: '仅支持 POST' } });
+    safeSend(res, 405, { error: { message: '仅支持 POST' } });
     return;
   }
 
   if (!DASHSCOPE_API_KEY) {
-    res.status(500).json({ error: { message: '服务端未配置 DASHSCOPE_API_KEY' } });
+    safeSend(res, 500, { error: { message: '服务端未配置 DASHSCOPE_API_KEY' } });
     return;
   }
 
   if (!req.body || typeof req.body !== 'object') {
-    res.status(400).json({ error: { message: '请求体不能为空' } });
+    safeSend(res, 400, { error: { message: '请求体不能为空' } });
     return;
   }
 
@@ -75,8 +83,6 @@ module.exports = async function handler(req, res) {
     });
   } catch (err) {
     console.error('[DashScope Vercel] 代理失败:', err.message);
-    if (!res.headersSent) {
-      res.status(502).json({ error: { message: 'DashScope 代理失败: ' + err.message } });
-    }
+    safeSend(res, 502, { error: { message: 'DashScope 代理失败: ' + err.message } });
   }
 };
