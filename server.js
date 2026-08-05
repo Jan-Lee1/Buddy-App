@@ -15,8 +15,12 @@ const path = require('path');
 
 const PORT = 3000;
 const STATIC_DIR = __dirname;
+const TEMP_DIR = path.join(__dirname, 'temp');
 const FEISHU_HOST = 'open.feishu.cn';
 const DASHSCOPE_HOST = 'dashscope.aliyuncs.com';
+
+// 确保临时目录存在
+if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 // ── 环境变量加载 ──────────────────────────────────────────
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || '';
@@ -358,23 +362,15 @@ function parseMultipartFile(bodyBuffer, boundary) {
   return null;
 }
 
-function submitAudioToParaformer(audioBuffer, filename) {
+function submitAudioToParaformer(audioBuffer, filename, localUrl) {
   return new Promise((resolve, reject) => {
-    const BOUNDARY = '----ParaformerBoundary' + Date.now();
-    const crlf = '\r\n';
-
-    // 构建 multipart body
-    const parts = [];
-    parts.push(Buffer.from('--' + BOUNDARY + crlf));
-    parts.push(Buffer.from('Content-Disposition: form-data; name="model"' + crlf + crlf));
-    parts.push(Buffer.from('paraformer-v1' + crlf));
-    parts.push(Buffer.from('--' + BOUNDARY + crlf));
-    parts.push(Buffer.from('Content-Disposition: form-data; name="file"; filename="' + filename + '"' + crlf));
-    parts.push(Buffer.from('Content-Type: audio/webm' + crlf + crlf));
-    parts.push(audioBuffer);
-    parts.push(Buffer.from(crlf + '--' + BOUNDARY + '--' + crlf));
-
-    const body = Buffer.concat(parts);
+    // Paraformer 异步转写需要 JSON body，参数为 file_urls（不可直接上传文件流）
+    const postData = JSON.stringify({
+      model: 'paraformer-v1',
+      input: {
+        file_urls: [localUrl]
+      }
+    });
 
     const options = {
       hostname: DASHSCOPE_HOST,
@@ -383,19 +379,19 @@ function submitAudioToParaformer(audioBuffer, filename) {
       method: 'POST',
       headers: {
         'Authorization': 'Bearer ' + DASHSCOPE_API_KEY,
-        'Content-Type': 'multipart/form-data; boundary=' + BOUNDARY,
-        'Content-Length': String(body.length),
+        'Content-Type': 'application/json',
+        'Content-Length': String(Buffer.byteLength(postData)),
       },
       timeout: 30000,
     };
 
-    console.log(`[Paraformer] 提交转写任务, 音频大小: ${(audioBuffer.length / 1024).toFixed(1)}KB`);
+    console.log(`[Paraformer] 提交转写任务, file_urls: ${localUrl}, 音频大小: ${(audioBuffer.length / 1024).toFixed(1)}KB`);
 
     const req = https.request(options, (res) => {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
-        console.log(`[Paraformer] 提交响应 ${res.statusCode}: ${data.substring(0, 200)}`);
+        console.log(`[Paraformer] 提交响应 ${res.statusCode}: ${data.substring(0, 300)}`);
         try {
           const json = JSON.parse(data);
           const taskId = json.output?.task_id;
@@ -412,7 +408,7 @@ function submitAudioToParaformer(audioBuffer, filename) {
 
     req.on('error', (e) => { reject(new Error('提交转写任务失败: ' + e.message)); });
     req.on('timeout', () => { req.destroy(); reject(new Error('提交转写任务超时')); });
-    req.write(body);
+    req.write(postData);
     req.end();
   });
 }
@@ -518,6 +514,7 @@ function proxyToTranscribe(req, res) {
   const chunks = [];
   req.on('data', (chunk) => { chunks.push(chunk); });
   req.on('end', async () => {
+    let tempFilePath = null;
     try {
       const bodyBuffer = Buffer.concat(chunks);
       const contentType = req.headers['content-type'] || '';
@@ -536,11 +533,22 @@ function proxyToTranscribe(req, res) {
         return;
       }
 
-      // 1. 提交转写任务
-      const taskId = await submitAudioToParaformer(parsed.buffer, parsed.filename);
+      // 1. 保存音频文件到 temp 目录（Paraformer 需要可访问的 URL）
+      const ext = path.extname(parsed.filename) || '.webm';
+      const tempName = 'rec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8) + ext;
+      tempFilePath = path.join(TEMP_DIR, tempName);
+      fs.writeFileSync(tempFilePath, parsed.buffer);
+      console.log(`[Transcribe] 音频已保存: ${tempFilePath} (${(parsed.buffer.length / 1024).toFixed(1)}KB)`);
+
+      // 构建本地可访问 URL
+      const localUrl = `http://localhost:${PORT}/temp/${tempName}`;
+      console.log(`[Transcribe] 文件 URL: ${localUrl}`);
+
+      // 2. 提交转写任务（使用 file_urls）
+      const taskId = await submitAudioToParaformer(parsed.buffer, parsed.filename, localUrl);
       console.log(`[Transcribe] 任务已创建: ${taskId}`);
 
-      // 2. 轮询等待结果（最多等待 40 秒）
+      // 3. 轮询等待结果（最多等待 40 秒）
       const text = await pollTranscriptionTask(taskId, 40000);
       console.log(`[Transcribe] ✅ 最终文本: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
 
@@ -556,6 +564,12 @@ function proxyToTranscribe(req, res) {
         'Access-Control-Allow-Origin': '*',
       });
       res.end(JSON.stringify({ error: { message: err.message } }));
+    } finally {
+      // 清理临时文件
+      if (tempFilePath && fs.existsSync(tempFilePath)) {
+        try { fs.unlinkSync(tempFilePath); console.log(`[Transcribe] 已清理: ${tempFilePath}`); }
+        catch (e) { console.warn('[Transcribe] 清理失败:', e.message); }
+      }
     }
   });
 }
