@@ -873,11 +873,9 @@ const DataManager = {
  *   FEISHU API CLIENT
  * =================================================================== */
 const FeishuAPI = {
-  // Use /api proxy when running on our local server (port 3000),
-  // otherwise use direct URL (may have CORS issues)
+  // 只要不是 file:// 协议，都使用 /api 代理路径（本地 localhost 和 Vercel 部署均适用）
   get _baseUrl() {
-    return (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
-      ? '/api' : 'https://open.feishu.cn/open-apis';
+    return (location.protocol === 'file:') ? 'https://open.feishu.cn/open-apis' : '/api';
   },
   _token: null, _tokenExpires: 0,
 
@@ -886,39 +884,34 @@ const FeishuAPI = {
 
     // Detect file:// protocol (CORS blocked)
     if (location.protocol === 'file:') {
-      throw new Error('当前通过 file:// 协议打开，浏览器禁止访问网络。请使用本地服务器访问（如 http://localhost:9527）');
+      throw new Error('当前通过 file:// 协议打开，浏览器禁止访问网络。请使用本地服务器访问');
     }
 
-    // 优先使用服务端 Token 端点（凭据存储在环境变量中，不暴露给前端）
-    const isProxied = (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
-
-    if (isProxied) {
-      try {
-        const resp = await fetch('/api/feishu/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json; charset=UTF-8' },
-          body: '{}'
-        });
-        const json = await resp.json();
-        if (json.code === 0 && json.tenant_access_token) {
-          this._token = json.tenant_access_token;
-          this._tokenExpires = Date.now() + (json.expire - 300) * 1000;
-          return this._token;
-        }
-        // 服务端未配置环境变量，返回了错误 → 回退到前端透传模式
-        if (json.code === -1 || resp.status >= 500) {
-          console.log('[Feishu] 服务端未配置 FEISHU_APP_ID/FEISHU_APP_SECRET，回退到前端凭据模式');
-        }
-      } catch (e) {
-        // /api/feishu/token 404 或其他网络错误 → 回退
-        console.log('[Feishu] 服务端Token端点不可用，回退到前端凭据模式:', e.message);
+    // ── 第一步：优先使用服务端 Token 端点（凭据存储在环境变量中，安全不暴露给前端）──
+    try {
+      const resp = await fetch('/api/feishu/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+        body: '{}'
+      });
+      const json = await resp.json();
+      if (json.code === 0 && json.tenant_access_token) {
+        this._token = json.tenant_access_token;
+        this._tokenExpires = Date.now() + (json.expire - 300) * 1000;
+        return this._token;
       }
+      // 服务端返回非0错误（未配置环境变量 或 凭据错误）→ 回退
+      const code = json.code || 0;
+      console.log(`[Feishu] 服务端Token端点返回 code=${code} msg=${json.msg}，回退到前端凭据模式`);
+    } catch (e) {
+      // /api/feishu/token 404 或网络错误 → 回退
+      console.log('[Feishu] 服务端Token端点不可用，回退到前端凭据模式:', e.message);
     }
 
-    // 回退：前端直接发送 App Secret（兼容旧版本 / 未配置环境变量）
+    // ── 第二步：回退：前端发送 App Secret 通过 /api 代理到飞书 ──
     if (!hasCredentials()) throw new Error('请先配置飞书 App ID 和 App Secret');
     try {
-      const resp = await fetch(`${this._baseUrl}/auth/v3/tenant_access_token/internal`, {
+      const resp = await fetch('/api/auth/v3/tenant_access_token/internal', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json; charset=UTF-8' },
         body: JSON.stringify({ app_id: cfg.appId, app_secret: cfg.appSecret })
@@ -936,10 +929,7 @@ const FeishuAPI = {
       return this._token;
     } catch (e) {
       if (e.name === 'TypeError' || e.message === 'Failed to fetch') {
-        if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
-          throw new Error('代理服务器未启动，请运行 node server.js 并通过 http://localhost:3000 访问');
-        }
-        throw new Error('网络连接失败，请通过 http://localhost:3000 访问（需要运行 node server.js）');
+        throw new Error('代理服务器未响应，请确认已运行 node server.js 并通过 http://localhost:3000 访问');
       }
       throw e;
     }
