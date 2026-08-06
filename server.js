@@ -15,12 +15,22 @@ const path = require('path');
 
 const PORT = 3000;
 const STATIC_DIR = __dirname;
-const TEMP_DIR = path.join(__dirname, 'temp');
+
+// Vercel 环境 /var/task 只读，使用 /tmp；本地使用 __dirname/temp
+const TEMP_DIR = process.env.VERCEL
+  ? path.join('/', 'tmp', 'temp')
+  : path.join(__dirname, 'temp');
+
 const FEISHU_HOST = 'open.feishu.cn';
 const DASHSCOPE_HOST = 'dashscope.aliyuncs.com';
 
 // 确保临时目录存在
-if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
+try {
+  if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
+} catch (e) {
+  // Vercel 等只读文件系统环境，静默忽略
+  console.warn('[Server] 无法创建 temp 目录:', e.message);
+}
 
 // ── 环境变量加载 ──────────────────────────────────────────
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || '';
