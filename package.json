@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "个人管理系统 - 包含记账、阅读、日记、习惯打卡、日程安排等功能",
   "private": true,
-  "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
