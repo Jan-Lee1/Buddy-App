@@ -1442,16 +1442,19 @@ const Voice = {
     try {
       this._mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      // 选择兼容性最好的 MIME 类型
-      let mimeType = 'audio/webm;codecs=opus';
+      // 选择兼容性最好的 MIME 类型（覆盖 Chrome/Edge/Firefox/Safari/iOS Safari）
+      let mimeType = 'audio/webm;codecs=opus';       // Chrome / Edge / Firefox
       if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = 'audio/webm';
+        mimeType = 'audio/webm';                     // Firefox fallback
         if (!MediaRecorder.isTypeSupported(mimeType)) {
-          mimeType = 'audio/mp4';
+          mimeType = 'audio/mp4';                    // Safari Desktop
           if (!MediaRecorder.isTypeSupported(mimeType)) {
-            mimeType = 'audio/ogg;codecs=opus';
+            mimeType = 'audio/aac';                  // iOS Safari (原生最佳)
             if (!MediaRecorder.isTypeSupported(mimeType)) {
-              mimeType = ''; // 浏览器默认
+              mimeType = 'audio/ogg;codecs=opus';    // 兜底
+              if (!MediaRecorder.isTypeSupported(mimeType)) {
+                mimeType = ''; // 浏览器默认
+              }
             }
           }
         }
@@ -1545,6 +1548,7 @@ const Voice = {
       const formData = new FormData();
       let ext = 'webm';
       if (mimeType.includes('mp4') || mimeType.includes('mp4a')) ext = 'm4a';
+      else if (mimeType.includes('aac')) ext = 'aac';
       else if (mimeType.includes('ogg')) ext = 'ogg';
       else if (mimeType.includes('wav')) ext = 'wav';
       formData.append('file', blob, `recording.${ext}`);
@@ -1973,6 +1977,8 @@ function deleteLocalRecord(module, localId) {
 let currentModule = 'finance';
 
 function switchModule(module) {
+  // Stop any ongoing voice recording to prevent orphaned results
+  if (Voice._activeModule && Voice._activeModule !== module) Voice.stop();
   currentModule = module;
   // Toggle active nav item
   document.querySelectorAll('.nav-item[data-module]').forEach(el => el.classList.remove('active'));
