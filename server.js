@@ -391,6 +391,7 @@ function submitAudioToParaformer(audioBuffer, filename, localUrl) {
         'Authorization': 'Bearer ' + DASHSCOPE_API_KEY,
         'Content-Type': 'application/json',
         'Content-Length': String(Buffer.byteLength(postData)),
+        'X-DashScope-Async': 'enable',
       },
       timeout: 30000,
     };
