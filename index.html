@@ -40,6 +40,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
 .nav-item .badge.zero{background:#ccc;}
 .sidebar-bottom{padding:12px 8px;border-top:1px solid var(--gray);display:flex;flex-direction:column;gap:4px;}
 .sidebar-bottom .nav-item{font-size:13px;}
+#btnSyncAll{transition:all .15s;}
+#btnSyncAll:hover{background:var(--blue);color:#fff;}
+#btnSyncAll:disabled{opacity:0.55;cursor:not-allowed;}
 
 /* ===== Main Panel ===== */
 .main-panel{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden;}
@@ -286,6 +289,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
     </div>
   </nav>
   <div class="sidebar-bottom">
+    <button class="btn-sync-all" id="btnSyncAll" onclick="syncAllModules()" style="margin:6px 10px;padding:8px 14px;width:calc(100% - 20px);border-radius:10px;border:1.5px solid var(--blue);background:var(--card);color:var(--blue);font-size:13px;font-weight:600;cursor:pointer;display:none;">🔄 一键同步所有</button>
     <div class="nav-item" onclick="openMemory()" style="font-size:13px;">🧠 记忆库</div>
     <div class="nav-item" onclick="openSettings()" style="font-size:13px;">⚙️ 设置</div>
     <span id="connStatus" style="font-size:11px;color:var(--sub);padding:4px 14px;">检测中...</span>
@@ -1065,6 +1069,12 @@ const SyncManager = {
     if (row) row.style.display = count > 0 ? 'flex' : 'none';
     // Render records
     renderModuleRecords(module);
+    // 刷新全局同步按钮
+    updateSyncAllButton();
+  },
+  /* ── 刷新全局一键同步按钮 ── */
+  updateSyncAll: function() {
+    updateSyncAllButton();
   }
 };
 
@@ -1977,8 +1987,8 @@ function deleteLocalRecord(module, localId) {
 let currentModule = 'finance';
 
 function switchModule(module) {
-  // Stop any ongoing voice recording to prevent orphaned results
-  if (Voice._activeModule && Voice._activeModule !== module) Voice.stop();
+  // 安全停止正在进行的语音录音（不阻塞模块切换）
+  try { if (typeof Voice !== 'undefined' && Voice._activeModule && Voice._activeModule !== module) Voice.stop(); } catch(e) {}
   currentModule = module;
   // Toggle active nav item
   document.querySelectorAll('.nav-item[data-module]').forEach(el => el.classList.remove('active'));
@@ -2465,6 +2475,42 @@ async function syncSingleModule(module) {
   if (btn) { btn.textContent = '立即同步'; }
   updateModuleBadges();
   SyncManager.updateModuleUI(module);
+  updateSyncAllButton();
+}
+
+/* ── 一键同步所有模块 ── */
+async function syncAllModules() {
+  const btn = document.getElementById('btnSyncAll');
+  if (btn) { btn.disabled = true; btn.textContent = '🔄 正在同步所有...'; }
+
+  const modules = ['finance', 'habit', 'reading', 'diary', 'schedule'];
+  let ok = 0;
+  for (const m of modules) {
+    try {
+      const res = await SyncManager.syncModule(m);
+      if (res && res.success !== false) ok++;
+    } catch (e) {
+      console.warn('[SyncAll] ' + m + ' 同步失败:', e.message);
+    }
+  }
+
+  if (btn) { btn.textContent = '🔄 一键同步所有'; btn.disabled = false; }
+  showToast(`同步完成: ${ok}/${modules.length} 模块成功`);
+  updateModuleBadges();
+  modules.forEach(m => SyncManager.updateModuleUI(m));
+  updateSyncAllButton();
+}
+
+/* ── 更新一键同步按钮可见性 ── */
+function updateSyncAllButton() {
+  const btn = document.getElementById('btnSyncAll');
+  if (!btn) return;
+  const modules = ['finance', 'habit', 'reading', 'diary', 'schedule'];
+  let hasPending = false;
+  for (const m of modules) {
+    if (DataManager.getPending(m).length > 0) { hasPending = true; break; }
+  }
+  btn.style.display = hasPending ? 'block' : 'none';
 }
 
 /* ===================================================================
@@ -2801,6 +2847,7 @@ function learnFromLastSave(module, data) {
     ['finance', 'habit', 'reading', 'diary', 'schedule'].forEach(m => {
       SyncManager.updateModuleUI(m);
     });
+    updateSyncAllButton();
   }, 5000);
 
   console.log('✅ 个人管理系统 v2.0 已就绪');
