@@ -102,7 +102,7 @@ function dashscopePost(path, bodyStr, headersOverride, timeoutSec) {
   });
 }
 
-/* ── 策略：input.file (base64) 提交 ── */
+/* ── 策略：input.file (base64) 异步提交 ── */
 function submitWithFile(fileBuffer, filename) {
   const base64 = fileBuffer.toString('base64');
   const mimeType = getMimeType(filename);
@@ -112,7 +112,12 @@ function submitWithFile(fileBuffer, filename) {
       file: `data:${mimeType};base64,${base64}`
     }
   });
-  return dashscopePost('/api/v1/services/audio/asr/transcription', postData);
+  // X-DashScope-Async: enable 将请求转为异步模式，避免 "does not support synchronous calls" 错误
+  return dashscopePost(
+    '/api/v1/services/audio/asr/transcription',
+    postData,
+    { 'X-DashScope-Async': 'enable' }
+  );
 }
 
 /* ── 从提交响应中提取 task_id ── */
