@@ -1,73 +1,48 @@
-/**
- * Vercel Serverless: 语音转写
- * POST /api/transcribe — multipart/form-data 上传音频
- * 使用 DashScope OpenAI 兼容端点：/compatible-mode/v1/audio/transcriptions
- * 无需区分同步/异步，直接返回转写文本
- */
+// api/transcribe.js — Vercel Serverless: 阶段一（上传音频→uguu.se→提交 DashScope 任务）
+// 入口: POST /api/transcribe (Content-Type: multipart/form-data)
+// 返回: { status: "processing", taskId: "xxx" } 或 { error: { message: "..." } }
 
 const https = require('https');
 
-const DASHSCOPE_HOST = 'dashscope.aliyuncs.com';
-const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || '';
-
-/* Get API Key (env var first, then X-DashScope-Key header) */
-function getApiKey(req) {
-  if (DASHSCOPE_API_KEY) return DASHSCOPE_API_KEY;
-  return (req.headers['x-dashscope-key'] || req.headers['X-DashScope-Key'] || '').trim();
-}
-
-/* ── 提取 boundary ── */
-function extractBoundary(contentType) {
-  if (!contentType) return null;
-  const m = contentType.match(/boundary="?([^";\s]+)"?/);
-  return m ? m[1] : null;
-}
-
-/* ── 从 multipart body 中提取文件 ── */
+// ── Multipart 文件解析（Buffer 逐字节搜索） ──
 function parseMultipartFile(bodyBuffer, boundary) {
-  const mark = Buffer.from('--' + boundary);
-  const parts = [];
-  let start = 0;
+  const boundaryBuffer = Buffer.from('--' + boundary);
+  const doubleCrlf = Buffer.from('\r\n\r\n');
 
-  while (true) {
-    const idx = bodyBuffer.indexOf(mark, start);
-    if (idx === -1) break;
-    start = idx + mark.length;
+  let pos = 0;
+  while (pos < bodyBuffer.length) {
+    const boundIdx = bodyBuffer.indexOf(boundaryBuffer, pos);
+    if (boundIdx === -1) break;
+    pos = boundIdx + boundaryBuffer.length;
 
-    // Find next boundary
-    const nextIdx = bodyBuffer.indexOf(mark, start);
-    if (nextIdx === -1) break;
+    const headerEnd = bodyBuffer.indexOf(doubleCrlf, pos);
+    if (headerEnd === -1) break;
 
-    let part = bodyBuffer.slice(start, nextIdx);
-    // Trim leading \r\n
-    if (part[0] === 0x0D && part[1] === 0x0A) part = part.slice(2);
-    if (part[part.length - 2] === 0x0D && part[part.length - 1] === 0x0A) part = part.slice(0, part.length - 2);
-    parts.push(part);
-    start = nextIdx;
-  }
+    const headersStr = bodyBuffer.slice(pos, headerEnd).toString('utf-8');
+    pos = headerEnd + 4;
 
-  for (const part of parts) {
-    const headerEnd = part.indexOf('\r\n\r\n');
-    if (headerEnd === -1) continue;
+    let contentEnd = bodyBuffer.indexOf(boundaryBuffer, pos);
+    if (contentEnd === -1) contentEnd = bodyBuffer.length;
 
-    const headersStr = part.slice(0, headerEnd).toString('utf8');
-    let content = part.slice(headerEnd + 4);
-    // Strip trailing \r\n
-    if (content[content.length - 2] === 0x0D && content[content.length - 1] === 0x0A) {
-      content = content.slice(0, content.length - 2);
+    let contentLen = contentEnd - pos;
+    if (contentLen >= 2 && bodyBuffer[contentEnd - 2] === 0x0d && bodyBuffer[contentEnd - 1] === 0x0a) {
+      contentLen -= 2;
     }
 
-    if (headersStr.toLowerCase().includes('filename')) {
-      const fn1 = headersStr.match(/filename="([^"]*)"/);
-      const fn2 = headersStr.match(/filename=([^\s;\r\n]+)/);
-      const filename = fn1 ? fn1[1] : (fn2 ? fn2[1] : 'audio.webm');
-      return { buffer: content, filename };
+    if (headersStr.includes('filename=')) {
+      const match = headersStr.match(/filename="([^"]+)"/);
+      const filename = match ? match[1] : 'audio.webm';
+      const fileBuffer = bodyBuffer.slice(pos, pos + contentLen);
+      console.log('[Transcribe] 收到:', filename, (fileBuffer.length / 1024).toFixed(1) + 'KB');
+      return { buffer: fileBuffer, filename };
     }
+
+    pos = contentEnd;
   }
   return null;
 }
 
-/* ── MIME 类型 ── */
+// ── MIME 类型 ──
 function getMimeType(filename) {
   const f = filename.toLowerCase();
   if (f.endsWith('.mp4') || f.endsWith('.m4a')) return 'audio/mp4';
@@ -78,139 +53,136 @@ function getMimeType(filename) {
   return 'audio/webm';
 }
 
-/* ── OpenAI 兼容端点转写 (multipart/form-data) ── */
-function transcribeWithOpenAIEndpoint(fileBuffer, filename, apiKey) {
+// ── 上传到 uguu.se 免费临时文件服务 ──
+function uploadToUguu(audioBuffer, filename, mimeType) {
   return new Promise((resolve, reject) => {
-    const mimeType = getMimeType(filename);
-    const boundary = '----DashScopeBoundary' + Date.now();
+    const boundary = '----Uguu' + Date.now() + Math.random().toString(36).slice(2);
     const crlf = '\r\n';
-
-    // Build multipart body
     const parts = [];
     parts.push(Buffer.from('--' + boundary + crlf));
-    parts.push(Buffer.from('Content-Disposition: form-data; name="model"' + crlf + crlf));
-    parts.push(Buffer.from('paraformer-v1' + crlf));
-    parts.push(Buffer.from('--' + boundary + crlf));
-    parts.push(Buffer.from('Content-Disposition: form-data; name="file"; filename="' + filename + '"' + crlf));
+    parts.push(Buffer.from('Content-Disposition: form-data; name="files[]"; filename="' + filename + '"' + crlf));
     parts.push(Buffer.from('Content-Type: ' + mimeType + crlf + crlf));
-    parts.push(fileBuffer);
+    parts.push(audioBuffer);
     parts.push(Buffer.from(crlf + '--' + boundary + '--' + crlf));
-
     const body = Buffer.concat(parts);
 
     const req = https.request({
-      hostname: DASHSCOPE_HOST,
-      port: 443,
-      path: '/compatible-mode/v1/audio/transcriptions',
-      method: 'POST',
+      hostname: 'uguu.se', path: '/upload', method: 'POST',
       headers: {
-        'Authorization': 'Bearer ' + apiKey,
         'Content-Type': 'multipart/form-data; boundary=' + boundary,
         'Content-Length': String(body.length),
+        'Accept': 'application/json',
       },
-      timeout: 60000,
+      rejectUnauthorized: false,
+      ALPNProtocols: ['http/1.1'],
+      timeout: 25000,
     }, (res) => {
-      let data = '';
-      res.on('data', (c) => { data += c; });
+      let d = ''; res.on('data', (c) => d += c);
       res.on('end', () => {
         try {
-          const json = JSON.parse(data);
-          if (json.text && typeof json.text === 'string') {
-            resolve(json.text.trim());
-          } else if (json.error) {
-            reject(new Error('转写失败: ' + (json.error.message || JSON.stringify(json.error))));
+          const json = JSON.parse(d);
+          if (json.success && json.files && json.files.length > 0) {
+            resolve(json.files[0].url);
           } else {
-            reject(new Error('转写返回异常: ' + data.substring(0, 200)));
+            reject(new Error('uguu.se 上传失败: ' + (json.description || '')));
           }
         } catch (e) {
-          reject(new Error('解析转写响应失败: ' + data.substring(0, 200)));
+          reject(new Error('uguu.se 响应异常'));
         }
       });
     });
-
-    req.on('error', (e) => reject(new Error('转写请求失败: ' + e.message)));
-    req.on('timeout', () => { req.destroy(); reject(new Error('转写请求超时')); });
-    req.write(body);
-    req.end();
+    req.on('error', (e) => reject(new Error('uguu.se 网络错误: ' + e.message)));
+    req.on('timeout', () => { req.destroy(); reject(new Error('uguu.se 超时')); });
+    req.write(body); req.end();
   });
 }
 
-/* ── 安全发送 JSON ── */
-function safeJson(res, status, payload) {
-  if (res.headersSent) {
-    console.warn('[Transcribe Vercel] 响应已发送，跳过');
-    return;
-  }
-  res.status(status).json(payload);
+// ── 提交 DashScope 异步转写任务 ──
+function submitTranscriptionTask(fileUrl, apiKey) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({
+      model: 'paraformer-v2',
+      input: { file_urls: [fileUrl] }
+    });
+
+    const req = https.request({
+      hostname: 'dashscope.aliyuncs.com',
+      path: '/api/v1/services/audio/asr/transcription',
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + apiKey,
+        'Content-Type': 'application/json',
+        'Content-Length': String(Buffer.byteLength(payload)),
+        'X-DashScope-Async': 'enable',
+      },
+      timeout: 25000,
+    }, (res) => {
+      let d = ''; res.on('data', (c) => d += c);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(d);
+          if (json.output && json.output.task_id) {
+            resolve(json.output.task_id);
+          } else if (json.code) {
+            reject(new Error('DashScope: ' + json.code + ' - ' + (json.message || '')));
+          } else {
+            reject(new Error('DashScope 未返回 task_id'));
+          }
+        } catch (e) {
+          reject(new Error('DashScope 响应异常'));
+        }
+      });
+    });
+    req.on('error', (e) => reject(new Error('DashScope 网络错误: ' + e.message)));
+    req.on('timeout', () => { req.destroy(); reject(new Error('DashScope 超时')); });
+    req.write(payload); req.end();
+  });
 }
 
-/* ── 入口 ── */
-module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-DashScope-Key');
+// ── Vercel handler ──
+module.exports = async (req, res) => {
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    return res.status(200).end();
+  }
 
-  if (req.method === 'OPTIONS') { res.status(204).end(); return; }
-  if (req.method !== 'POST') { safeJson(res, 405, { text: '', error: '仅支持 POST' }); return; }
-
-  const apiKey = getApiKey(req);
+  const apiKey = process.env.DASHSCOPE_API_KEY || process.env.DASHSCOPE_KEY || '';
   if (!apiKey) {
-    console.error('[Transcribe Vercel] 未配置 DashScope API Key（环境变量和请求头均缺失）');
-    safeJson(res, 500, { text: '', error: '服务端未配置 DashScope API Key' });
-    return;
+    return res.status(500).json({ error: { message: '服务端未配置 DASHSCOPE_API_KEY' } });
+  }
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: { message: 'Method not allowed' } });
+  }
+
+  const contentType = req.headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary=(-+[^\s;]+)/);
+  if (!boundaryMatch) {
+    return res.status(400).json({ error: { message: '缺少 multipart boundary' } });
   }
 
   try {
-    // 读取完整请求体
     const chunks = [];
-    await new Promise((resolve, reject) => {
-      req.on('data', (c) => chunks.push(c));
-      req.on('end', resolve);
-      req.on('error', reject);
-    });
+    for await (const chunk of req) { chunks.push(chunk); }
     const bodyBuffer = Buffer.concat(chunks);
 
-    if (bodyBuffer.length === 0) {
-      safeJson(res, 400, { text: '', error: '未收到音频数据' });
-      return;
+    const parsed = parseMultipartFile(bodyBuffer, boundaryMatch[1]);
+    if (!parsed || !parsed.buffer || parsed.buffer.length < 100) {
+      return res.status(400).json({ error: { message: '未收到有效音频文件' } });
     }
 
-    console.log(`[Transcribe Vercel] 收到请求体: ${(bodyBuffer.length / 1024).toFixed(1)}KB`);
+    const mime = getMimeType(parsed.filename);
 
-    // 尝试直接作为纯二进制音频处理（非 multipart）
-    let audioBuffer = null;
-    let filename = 'audio.webm';
+    const publicUrl = await uploadToUguu(parsed.buffer, parsed.filename, mime);
+    const taskId = await submitTranscriptionTask(publicUrl, apiKey);
 
-    const contentType = req.headers['content-type'] || '';
-    const boundary = extractBoundary(contentType);
-
-    if (boundary) {
-      // Multipart 上传
-      const file = parseMultipartFile(bodyBuffer, boundary);
-      if (file) {
-        audioBuffer = file.buffer;
-        filename = file.filename;
-      }
-    }
-
-    // 如果没有 boundary 或解析失败，尝试作为纯二进制
-    if (!audioBuffer) {
-      audioBuffer = bodyBuffer;
-      console.log('[Transcribe Vercel] 非 multipart 请求，按纯二进制处理');
-    }
-
-    if (!audioBuffer || audioBuffer.length < 100) {
-      safeJson(res, 400, { text: '', error: '音频数据太短或无效' });
-      return;
-    }
-
-    console.log(`[Transcribe Vercel] 文件: ${filename}, 大小: ${(audioBuffer.length / 1024).toFixed(1)}KB`);
-    const text = await transcribeWithOpenAIEndpoint(audioBuffer, filename, apiKey);
-    console.log(`[Transcribe Vercel] 转写成功: "${text}"`);
-    safeJson(res, 200, { text });
-
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    return res.status(200).json({ status: 'processing', taskId });
   } catch (err) {
-    console.error('[Transcribe Vercel] 转写失败:', err.message);
-    safeJson(res, 500, { text: '', error: err.message });
+    console.error('[Transcribe] 失败:', err.message);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    return res.status(500).json({ error: { message: err.message } });
   }
 };

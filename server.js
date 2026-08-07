@@ -343,11 +343,14 @@ function proxyFeishuToken(req, res) {
 }
 
 /* ================================================================
- *  TRANSCRIBE: 语音转写 (MediaRecorder → Paraformer)
- *  接收音频文件 → 异步提交 DashScope Paraformer → 轮询结果 → 返回文本
+ *  TRANSCRIBE: 语音转写 (MediaRecorder → uguu.se → Paraformer)
+ *  两阶段异步：
+ *   POST /api/transcribe        → 上传音频→uguu.se→提交任务→返回taskId
+ *   GET  /api/transcribe/status → 查询任务→返回文本
  * ================================================================ */
+
+// ── multipart 文件解析 ──
 function parseMultipartFile(bodyBuffer, boundary) {
-  // 用 latin1 编码分割，保留二进制完整性
   const bodyStr = bodyBuffer.toString('latin1');
   const parts = bodyStr.split('--' + boundary);
 
@@ -361,7 +364,6 @@ function parseMultipartFile(bodyBuffer, boundary) {
     const headersStr = part.substring(0, headerEndIdx);
     let contentStr = part.substring(headerEndIdx + 4);
 
-    // 去除尾部 \r\n
     if (contentStr.endsWith('\r\n')) {
       contentStr = contentStr.substring(0, contentStr.length - 2);
     }
@@ -377,7 +379,7 @@ function parseMultipartFile(bodyBuffer, boundary) {
   return null;
 }
 
-// ── MIME 类型（根据文件名推断） ──
+// ── MIME 类型 ──
 function getMimeType(filename) {
   const f = filename.toLowerCase();
   if (f.endsWith('.mp4') || f.endsWith('.m4a')) return 'audio/mp4';
@@ -388,6 +390,172 @@ function getMimeType(filename) {
   return 'audio/webm';
 }
 
+// ── 上传音频到 uguu.se 免费临时文件服务 ──
+function uploadToUguu(audioBuffer, filename, mimeType) {
+  return new Promise((resolve, reject) => {
+    const boundary = '----Uguu' + Date.now() + Math.random().toString(36).slice(2);
+    const crlf = '\r\n';
+    const parts = [];
+    parts.push(Buffer.from('--' + boundary + crlf));
+    parts.push(Buffer.from('Content-Disposition: form-data; name="files[]"; filename="' + filename + '"' + crlf));
+    parts.push(Buffer.from('Content-Type: ' + mimeType + crlf + crlf));
+    parts.push(audioBuffer);
+    parts.push(Buffer.from(crlf + '--' + boundary + '--' + crlf));
+    const body = Buffer.concat(parts);
+
+    console.log(`[Uguu] 上传 ${filename} (${(audioBuffer.length / 1024).toFixed(1)}KB) 到 uguu.se`);
+
+    const req = https.request({
+      hostname: 'uguu.se',
+      path: '/upload',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'multipart/form-data; boundary=' + boundary,
+        'Content-Length': String(body.length),
+        'Accept': 'application/json',
+      },
+      rejectUnauthorized: false,
+      ALPNProtocols: ['http/1.1'],
+      timeout: 30000,
+    }, (res) => {
+      let d = '';
+      res.on('data', (c) => d += c);
+      res.on('end', () => {
+        console.log(`[Uguu] HTTP ${res.statusCode}: ${d.substring(0, 200)}`);
+        try {
+          const json = JSON.parse(d);
+          if (json.success && json.files && json.files.length > 0) {
+            const url = json.files[0].url;
+            console.log(`[Uguu] ✅ 上传成功: ${url}`);
+            resolve(url);
+          } else {
+            reject(new Error('uguu.se 上传失败: ' + (json.description || '未知错误')));
+          }
+        } catch (e) {
+          reject(new Error('uguu.se 响应解析失败: ' + d.substring(0, 200)));
+        }
+      });
+    });
+    req.on('error', (e) => reject(new Error('uguu.se 网络错误: ' + e.message)));
+    req.on('timeout', () => { req.destroy(); reject(new Error('uguu.se 上传超时')); });
+    req.write(body);
+    req.end();
+  });
+}
+
+// ── 提交 DashScope 异步转写任务 ──
+function submitTranscriptionTask(fileUrl, apiKey) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({
+      model: 'paraformer-v2',
+      input: { file_urls: [fileUrl] }
+    });
+
+    console.log(`[DashScope ASR] 提交任务: model=paraformer-v2, file_urls=[${fileUrl.substring(0, 60)}...]`);
+
+    const req = https.request({
+      hostname: DASHSCOPE_HOST,
+      path: '/api/v1/services/audio/asr/transcription',
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + apiKey,
+        'Content-Type': 'application/json',
+        'Content-Length': String(Buffer.byteLength(payload)),
+        'X-DashScope-Async': 'enable',
+      },
+      timeout: 30000,
+    }, (res) => {
+      let d = '';
+      res.on('data', (c) => d += c);
+      res.on('end', () => {
+        console.log(`[DashScope ASR] 提交状态: ${res.statusCode}, 响应: ${d.substring(0, 300)}`);
+        try {
+          const json = JSON.parse(d);
+          if (json.output && json.output.task_id) {
+            console.log(`[DashScope ASR] ✅ task_id: ${json.output.task_id}`);
+            resolve(json.output.task_id);
+          } else if (json.code) {
+            reject(new Error('DashScope 返回错误: ' + json.code + ' - ' + (json.message || '')));
+          } else {
+            reject(new Error('DashScope 未返回 task_id: ' + d.substring(0, 200)));
+          }
+        } catch (e) {
+          reject(new Error('DashScope 提交响应解析失败: ' + d.substring(0, 200)));
+        }
+      });
+    });
+    req.on('error', (e) => reject(new Error('DashScope 提交请求失败: ' + e.message)));
+    req.on('timeout', () => { req.destroy(); reject(new Error('DashScope 提交请求超时')); });
+    req.write(payload);
+    req.end();
+  });
+}
+
+// ── 查询 DashScope 转写任务状态 ──
+function queryTranscriptionTask(taskId, apiKey) {
+  return new Promise((resolve, reject) => {
+    const urlPath = '/api/v1/tasks/' + taskId;
+
+    https.get({
+      hostname: DASHSCOPE_HOST,
+      path: urlPath,
+      headers: { 'Authorization': 'Bearer ' + apiKey },
+      timeout: 20000,
+    }, (res) => {
+      let d = '';
+      res.on('data', (c) => d += c);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(d);
+          const taskStatus = json.output && json.output.task_status;
+
+          if (taskStatus === 'SUCCEEDED') {
+            // 任务完成，获取 transcription_url
+            const results = json.output.results || [];
+            if (results.length > 0 && results[0].transcription_url) {
+              const transUrl = results[0].transcription_url;
+              console.log(`[DashScope ASR] 任务完成，transcription_url: ${transUrl}`);
+
+              // 下载转写结果
+              https.get(transUrl, (res2) => {
+                let d2 = '';
+                res2.on('data', (c) => d2 += c);
+                res2.on('end', () => {
+                  try {
+                    const transJson = JSON.parse(d2);
+                    let text = '';
+                    if (transJson.transcripts && transJson.transcripts.length > 0) {
+                      text = transJson.transcripts[0].text || '';
+                    } else if (transJson.text) {
+                      text = transJson.text;
+                    }
+                    resolve({ status: 'completed', text: text.trim() });
+                  } catch (e) {
+                    reject(new Error('转写结果解析失败: ' + d2.substring(0, 200)));
+                  }
+                });
+              }).on('error', (e) => reject(new Error('下载转写结果失败: ' + e.message)));
+            } else {
+              reject(new Error('任务完成但无 transcription_url'));
+            }
+          } else if (taskStatus === 'FAILED') {
+            const errMsg = json.output && json.output.message || '未知错误';
+            console.log(`[DashScope ASR] 任务失败: ${errMsg}`);
+            resolve({ status: 'failed', error: errMsg });
+          } else {
+            // PENDING 或 RUNNING
+            console.log(`[DashScope ASR] task_status: ${taskStatus || 'UNKNOWN'}`);
+            resolve({ status: 'processing' });
+          }
+        } catch (e) {
+          reject(new Error('DashScope 查询响应解析失败: ' + d.substring(0, 200)));
+        }
+      });
+    }).on('error', (e) => reject(new Error('DashScope 查询请求失败: ' + e.message)));
+  });
+}
+
+// ── POST /api/transcribe (阶段一：上传+提交任务) ──
 function proxyToTranscribe(req, res) {
   const apiKey = getDashScopeKey(req);
   if (!apiKey) {
@@ -405,95 +573,71 @@ function proxyToTranscribe(req, res) {
       const boundaryMatch = contentType.match(/boundary=(-+[^\s;]+)/);
 
       if (!boundaryMatch) {
-        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.writeHead(400, corsHeaders());
         res.end(JSON.stringify({ error: { message: '请求格式错误，缺少 multipart boundary' } }));
         return;
       }
 
       const parsed = parseMultipartFile(bodyBuffer, boundaryMatch[1]);
       if (!parsed || !parsed.buffer || parsed.buffer.length < 100) {
-        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.writeHead(400, corsHeaders());
         res.end(JSON.stringify({ error: { message: '未收到有效音频文件' } }));
         return;
       }
 
-      console.log(`[Transcribe] 音频: ${(parsed.buffer.length / 1024).toFixed(1)}KB, 文件类型: ${parsed.filename}`);
-
-      // 使用 DashScope OpenAI 兼容端点，直接发送文件（不通过 URL）
       const mime = getMimeType(parsed.filename);
-      const boundary = '----WebKitFormBoundary' + Math.random().toString(36).slice(2);
-      const parts = [];
+      console.log(`[Transcribe] 音频: ${(parsed.buffer.length / 1024).toFixed(1)}KB, MIME: ${mime}`);
 
-      parts.push(Buffer.from(
-        '--' + boundary + '\r\n' +
-        'Content-Disposition: form-data; name="model"\r\n\r\n' +
-        'paraformer-v1\r\n'
-      ));
+      // Step 1: 上传到 uguu.se 获取公网 URL
+      const publicUrl = await uploadToUguu(parsed.buffer, parsed.filename, mime);
 
-      parts.push(Buffer.from(
-        '--' + boundary + '\r\n' +
-        'Content-Disposition: form-data; name="file"; filename="' + parsed.filename + '"\r\n' +
-        'Content-Type: ' + mime + '\r\n\r\n'
-      ));
-      parts.push(parsed.buffer);
-      parts.push(Buffer.from('\r\n--' + boundary + '--\r\n'));
+      // Step 2: 提交 DashScope 异步转写任务
+      const taskId = await submitTranscriptionTask(publicUrl, apiKey);
 
-      const multipartBody = Buffer.concat(parts);
-
-      const options = {
-        hostname: DASHSCOPE_HOST,
-        port: 443,
-        path: '/compatible-mode/v1/audio/transcriptions',
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer ' + apiKey,
-          'Content-Type': 'multipart/form-data; boundary=' + boundary,
-          'Content-Length': String(multipartBody.length),
-        },
-        timeout: 60000,
-      };
-
-      const result = await new Promise((resolve, reject) => {
-        const httpReq = https.request(options, (httpRes) => {
-          let data = '';
-          httpRes.on('data', (chunk) => { data += chunk; });
-          httpRes.on('end', () => {
-            console.log(`[Transcribe] DashScope ${httpRes.statusCode}: ${data.substring(0, 300)}`);
-            try {
-              const json = JSON.parse(data);
-              if (json.text) {
-                resolve(json.text);
-              } else {
-                reject(new Error(json.error?.message || JSON.stringify(json.error) || '转写失败'));
-              }
-            } catch (e) {
-              reject(new Error('解析转写响应失败: ' + data.substring(0, 200)));
-            }
-          });
-        });
-
-        httpReq.on('error', (e) => { reject(new Error('转写请求失败: ' + e.message)); });
-        httpReq.on('timeout', () => { httpReq.destroy(); reject(new Error('转写请求超时（60秒）')); });
-        httpReq.write(multipartBody);
-        httpReq.end();
-      });
-
-      console.log(`[Transcribe] ✅ 转写完成: "${result.substring(0, 50)}${result.length > 50 ? '...' : ''}"`);
-
-      res.writeHead(200, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Access-Control-Allow-Origin': '*',
-      });
-      res.end(JSON.stringify({ text: result }));
+      res.writeHead(200, corsHeaders());
+      res.end(JSON.stringify({ status: 'processing', taskId }));
     } catch (err) {
-      console.error('[Transcribe] 转写失败:', err.message);
-      res.writeHead(500, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Access-Control-Allow-Origin': '*',
-      });
+      console.error('[Transcribe] 阶段一失败:', err.message);
+      res.writeHead(500, corsHeaders());
       res.end(JSON.stringify({ error: { message: err.message } }));
     }
   });
+}
+
+// ── GET /api/transcribe/status (阶段二：查询任务) ──
+function handleTranscribeStatus(req, res) {
+  const apiKey = getDashScopeKey(req);
+  if (!apiKey) {
+    res.writeHead(500, corsHeaders());
+    res.end(JSON.stringify({ error: { message: '服务端未配置 DASHSCOPE_API_KEY' } }));
+    return;
+  }
+
+  const urlObj = new URL(req.url, 'http://localhost');
+  const taskId = urlObj.searchParams.get('taskId');
+
+  if (!taskId) {
+    res.writeHead(400, corsHeaders());
+    res.end(JSON.stringify({ error: { message: '缺少 taskId 参数' } }));
+    return;
+  }
+
+  queryTranscriptionTask(taskId, apiKey).then((result) => {
+    res.writeHead(200, corsHeaders());
+    res.end(JSON.stringify(result));
+  }).catch((err) => {
+    console.error('[Transcribe] 阶段二失败:', err.message);
+    res.writeHead(500, corsHeaders());
+    res.end(JSON.stringify({ status: 'failed', error: err.message }));
+  });
+}
+
+// ── CORS headers 快捷函数 ──
+function corsHeaders() {
+  return {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Access-Control-Allow-Origin': '*',
+  };
 }
 
 const server = http.createServer((req, res) => {
@@ -516,9 +660,15 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Proxy /api/transcribe → DashScope Paraformer 语音转写 (BEFORE /api/ general)
+  // Proxy /api/transcribe → 语音转写提交任务
   if (req.url === '/api/transcribe' && req.method === 'POST') {
     proxyToTranscribe(req, res);
+    return;
+  }
+
+  // GET /api/transcribe/status → 查询转写任务状态
+  if (req.url.startsWith('/api/transcribe/status') && req.method === 'GET') {
+    handleTranscribeStatus(req, res);
     return;
   }
 

@@ -1536,6 +1536,9 @@ const Voice = {
       else if (mimeType.includes('wav')) ext = 'wav';
       formData.append('file', blob, `recording.${ext}`);
 
+      // ── 阶段一：上传音频 + 提交转写任务 ──
+      Debug.log('📤 上传音频并提交转写任务...', 'info');
+
       const resp = await fetch('/api/transcribe', {
         method: 'POST',
         body: formData
@@ -1547,9 +1550,19 @@ const Voice = {
         throw new Error(msg);
       }
 
-      const result = await resp.json();
-      const text = (result.text || result.output?.text || '').trim();
+      const stage1 = await resp.json();
 
+      if (stage1.status !== 'processing' || !stage1.taskId) {
+        throw new Error(stage1.error?.message || '任务提交失败');
+      }
+
+      Debug.log(`📋 任务已提交: ${stage1.taskId}`, 'info');
+      this._currentTaskId = stage1.taskId;
+
+      // ── 阶段二：轮询查询转写结果 ──
+      const text = await this._pollTranscribeStatus(stage1.taskId, module);
+
+      // ── 显示结果（第一阶段只填入输入框，不触发 AI 解析） ──
       if (!text) {
         Debug.log('⚠️ 转写返回空文本', 'warn');
         showToast('未识别到语音内容，请清晰说话后重试', 'error');
@@ -1557,7 +1570,8 @@ const Voice = {
       } else {
         Debug.log(`✅ 转写成功: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`, 'ok');
         if (input) input.value = text;
-        if (this._onResult) this._onResult(text);
+        // 第一阶段暂不触发 AI 解析
+        // if (this._onResult) this._onResult(text);
       }
     } catch (err) {
       console.error('[Voice] Transcription failed:', err);
@@ -1567,6 +1581,47 @@ const Voice = {
     }
 
     this._cleanup();
+  },
+
+  // ── 轮询转写任务状态 ──
+  async _pollTranscribeStatus(taskId, module) {
+    const maxAttempts = 30;   // 最多轮询 30 次
+    const interval = 2000;    // 每 2 秒一次
+
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(r => setTimeout(r, interval));
+
+      try {
+        const resp = await fetch(`/api/transcribe/status?taskId=${taskId}`);
+        if (!resp.ok) {
+          Debug.log(`⚠️ 轮询返回 ${resp.status}，继续等待...`, 'warn');
+          continue;
+        }
+
+        const result = await resp.json();
+
+        if (result.status === 'completed') {
+          Debug.log(`✅ 转写完成 (第${i + 1}次轮询)`, 'ok');
+          return result.text || '';
+        }
+
+        if (result.status === 'failed') {
+          const errMsg = result.error || '转写失败';
+          throw new Error('DashScope 转写失败: ' + errMsg);
+        }
+
+        // status === 'processing' → 继续轮询
+        if (i === 0 || i % 5 === 0) {
+          Debug.log(`⏳ 等待转写中... (${i + 1}/${maxAttempts})`, 'info');
+        }
+      } catch (err) {
+        if (err.message.startsWith('DashScope')) throw err; // 确定的失败
+        Debug.log(`⚠️ 轮询异常: ${err.message}`, 'warn');
+        // 网络错误继续重试
+      }
+    }
+
+    throw new Error('转写超时，请缩短录音后重试');
   },
 
   _cleanup() {
@@ -1582,6 +1637,7 @@ const Voice = {
     this._chunks = [];
     this._activeModule = null;
     this._onResult = null;
+    this._currentTaskId = null;
   },
 
   _highlight(module) {
