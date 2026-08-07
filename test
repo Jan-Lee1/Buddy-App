@@ -1,0 +1,16 @@
+# 1. 进入项目
+cd "D:\software\CodeBuddy CN\My app"
+
+# 2. 初始化 Git
+git init
+
+# 3. 暂存 + 提交
+git add --all
+git commit -m "feat: 个人管理系统 v1.0"
+
+# 4. 先去 https://github.com/new 创建空仓库，然后关联
+git remote add origin https://github.com/你的用户名/仓库名.git
+
+# 5. 推送
+git branch -M main
+git push -u origin main
