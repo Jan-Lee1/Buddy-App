@@ -104,12 +104,18 @@ const ielts = [
   { n: '内容完整性', c: 'CC', d: 'Content Completeness' },
 ]
 
-function genScore(d: number): ScoreResult {
-  return { accuracy: Math.floor(Math.random() * 15) + 70, fluency: Math.floor(Math.random() * 18) + 68,
-    completeness: Math.min(100, Math.floor((d / 60) * 100)),
-    total: Math.round((Math.floor(Math.random() * 18) + 68) * .3 + (Math.floor(Math.random() * 20) + 65) * .2 + (Math.floor(Math.random() * 15) + 70) * .2 + (Math.floor(Math.random() * 15) + 72) * .15 + Math.min(100, Math.floor((d / 60) * 100)) * .15),
-    errors: ['中式英语: 按中文语序组织英文句子', '时态混用: 过去时与现在时交替', '词汇单调: 多次使用简单词'],
-    suggestions: ['用"Furthermore / Moreover"扩展论述层次', '回听录音找出3处可优化的发音', '用"Additionally / In contrast"类过渡词', '尝试更复杂的长句表达'], timestamp: Date.now() }
+async function callTranscribeAPI(blob: Blob, mimeType: string): Promise<ScoreResult & { transcription: string }> {
+  const res = await fetch('/api/transcribe', { method: 'POST', headers: { 'Content-Type': mimeType }, body: blob })
+  if (!res.ok) throw new Error('Upload failed: HTTP ' + res.status)
+  const { task_id } = await res.json()
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 2000))
+    const pollRes = await fetch(`/api/transcribe-status?task_id=${task_id}`)
+    const data = await pollRes.json()
+    if (data.status === 'completed') return { accuracy: data.accuracy ?? 50, fluency: data.fluency ?? 50, completeness: data.completeness ?? 50, total: data.total ?? 50, errors: data.errors ?? [], suggestions: data.suggestions ?? [], timestamp: Date.now(), transcription: data.transcription ?? '' }
+    if (data.status === 'failed' || data.status === 'error') throw new Error(data.message || data.error || 'ASR failed')
+  }
+  throw new Error('ASR polling timeout')
 }
 
 export default function TopicDesign() {
@@ -125,12 +131,14 @@ export default function TopicDesign() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const durRef = useRef(0)
   const levelCheckRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const lastAudioRef = useRef<RecorderResult | null>(null)
 
   const onStop = useCallback((r: RecorderResult) => {
     if (levelCheckRef.current) { clearInterval(levelCheckRef.current); levelCheckRef.current = null }
     setSilent(false)
+    lastAudioRef.current = r
     const e = recorder.validateRecording(r)
-    if (e) { setVMsg(e); setPhase('validationError'); return }
+    if (e) { setVMsg(e); setPhase('validationError'); lastAudioRef.current = null; return }
     setPhase('playback')
   }, [])
 
@@ -152,16 +160,37 @@ export default function TopicDesign() {
     return () => { if (levelCheckRef.current) { clearInterval(levelCheckRef.current); levelCheckRef.current = null } }
   }, [phase, recorder])
 
-  const submitScore = useCallback(() => {
+  const submitScore = useCallback(async () => {
     setPhase('analyzing'); setAP(0); durRef.current = recorder.elapsedMs
+    const audio = lastAudioRef.current
     let p = 0
     timerRef.current = setInterval(() => {
-      p += Math.random() * 12 + 4
-      if (p >= 100) { p = 100; if (timerRef.current) clearInterval(timerRef.current)
-        const d = Math.round(recorder.elapsedMs / 1000)
-        const s = genScore(d); s.topicTitle = topic.title; setScore(s); addScoreRecord(s); addDailyPractice(Math.round(d / 20)); setPhase('result') }
-      setAP(Math.min(100, p))
-    }, 200)
+      p += 4
+      if (p >= 30) { if (timerRef.current) clearInterval(timerRef.current) }
+      setAP(Math.min(95, p))
+    }, 120)
+
+    try {
+      if (!audio?.blob || audio.blob.size < 1024) throw new Error('No valid recording')
+      const scores = await callTranscribeAPI(audio.blob, audio.mimeType)
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+      setAP(100)
+      const sr: ScoreResult = { ...scores, timestamp: Date.now(), topicTitle: topic.title }
+      setScore(sr); addScoreRecord(sr); addDailyPractice(Math.round(recorder.elapsedMs / 20000))
+      setPhase('result')
+    } catch (e: any) {
+      console.error('ASR unavailable, offline fallback:', e.message)
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+      setAP(100)
+      const sr: ScoreResult = {
+        accuracy: 0, fluency: 0, completeness: 0, total: 0,
+        errors: [`Service offline: ${e.message?.slice(0, 60) || 'unknown error'}`],
+        suggestions: ['Start dev API with: npm run dev:api', 'Or deploy to Vercel for full transcription'],
+        timestamp: Date.now(), topicTitle: topic.title,
+      }
+      setScore(sr); addScoreRecord(sr); addDailyPractice(Math.round(recorder.elapsedMs / 20000))
+      setPhase('result')
+    }
   }, [recorder.elapsedMs, topic, addDailyPractice, addScoreRecord])
 
   useEffect(() => { return () => { if (timerRef.current) clearInterval(timerRef.current) } }, [])
@@ -174,7 +203,7 @@ export default function TopicDesign() {
   const startPrep = () => { setPhase('prepare'); setPrep(30)
     timerRef.current = setInterval(() => { setPrep(p => { if (p <= 1) { if (timerRef.current) clearInterval(timerRef.current); return 0 } return p - 1 }) }, 1000) }
   const beginSpeak = async () => { if (timerRef.current) clearInterval(timerRef.current); setPhase('speaking'); setSilent(false); await recorder.startRecording() }
-  const reset = () => { if (timerRef.current) clearInterval(timerRef.current); setScore(null); setPhase('select'); setVMsg(''); recorder.cancelRecording() }
+  const reset = () => { if (timerRef.current) clearInterval(timerRef.current); setScore(null); setPhase('select'); setVMsg(''); recorder.cancelRecording(); lastAudioRef.current = null }
   const retry = () => { setVMsg(''); recorder.cancelRecording(); setPhase('select') }
 
   const fmt = (ms: number) => `${String(Math.floor(ms / 60000)).padStart(2, '0')}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, '0')}`
@@ -276,6 +305,7 @@ export default function TopicDesign() {
         </div>
         <div className="bg-red-50 rounded-2xl p-5 border border-red-100"><h4 className="font-semibold text-red-700 mb-2">需要改进</h4>{score.errors.map((e, i) => <p key={i} className="text-sm text-red-600 mb-1">• {e}</p>)}</div>
         <div className="bg-emerald-50 rounded-2xl p-5 border border-emerald-100"><h4 className="font-semibold text-emerald-700 mb-2">优化建议</h4>{score.suggestions.map((s, i) => <p key={i} className="text-sm text-emerald-600 mb-1">• {s}</p>)}</div>
+        {score.transcription && (<div className="bg-blue-50 rounded-2xl p-5 border border-blue-200"><h4 className="font-semibold text-blue-700 mb-2">转写文本</h4><p className="text-sm text-blue-600 leading-relaxed italic">"{score.transcription}"</p></div>)}
         <div className="flex gap-3 pb-4"><button onClick={reset} className="flex-1 py-3 bg-gray-100 text-gray-700 rounded-xl font-medium hover:bg-gray-200">再来一题</button><button onClick={() => setPage('review')} className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700">查看复盘 →</button></div>
       </div>)}
     </div>

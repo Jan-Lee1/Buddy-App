@@ -39,6 +39,7 @@ export interface ScoreResult {
   timestamp: number
   scenarioTitle?: string
   topicTitle?: string
+  transcription?: string
 }
 
 export interface DailyRecord {

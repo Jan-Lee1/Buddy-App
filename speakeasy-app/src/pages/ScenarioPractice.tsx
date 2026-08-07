@@ -98,20 +98,40 @@ function AudioWaveform({ getAnalyser, isRecording, silent }: {
   )
 }
 
-/* ───────── 模拟评分 ───────── */
-function generateScore(d: number): ScoreResult {
-  const acc = Math.floor(Math.random() * 20) + 70
-  const flu = Math.floor(Math.random() * 18) + 72
-  const com = Math.min(100, Math.floor((d / 8) * 100))
-  const errPool = ['th sound: /s/ instead of /θ/', 'Intonation error at question end', 'Missing article "the"', 'Verb tense: present → past failure', 'Wrong syllable stress', 'Linking sounds broken']
-  const sugPool = ['Place tongue between teeth for "th"', 'Slow down, focus on rhythm', 'Use articles before specific nouns', 'Mind past-tense markers', 'Shadow native audio for stress', 'Practice linking like "an apple"']
-  const n = Math.min(2, Math.floor(d / 4)) + 1
-  return {
-    accuracy: acc, fluency: flu, completeness: com, total: Math.round(acc * .35 + flu * .35 + com * .3),
-    errors: errPool.sort(() => Math.random() - .5).slice(0, n),
-    suggestions: sugPool.sort(() => Math.random() - .5).slice(0, n),
-    timestamp: Date.now(), scenarioTitle: '',
+/* ───────── API 转写 ───────── */
+async function callTranscribeAPI(blob: Blob, mimeType: string): Promise<ScoreResult & { transcription: string }> {
+  // Step 1: 创建 ASR 任务
+  const res = await fetch('/api/transcribe', {
+    method: 'POST',
+    headers: { 'Content-Type': mimeType },
+    body: blob,
+  });
+  if (!res.ok) throw new Error('Upload failed: HTTP ' + res.status);
+  const { task_id } = await res.json();
+
+  // Step 2: 轮询直到完成（最多 30 次 × 2s = 60s）
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const pollRes = await fetch(`/api/transcribe-status?task_id=${task_id}`);
+    const data = await pollRes.json();
+
+    if (data.status === 'completed') {
+      return {
+        accuracy: data.accuracy ?? 50,
+        fluency: data.fluency ?? 50,
+        completeness: data.completeness ?? 50,
+        total: data.total ?? 50,
+        errors: data.errors ?? [],
+        suggestions: data.suggestions ?? [],
+        timestamp: Date.now(),
+        transcription: data.transcription ?? '',
+      };
+    }
+    if (data.status === 'failed' || data.status === 'error') {
+      throw new Error(data.message || data.error || 'ASR failed');
+    }
   }
+  throw new Error('ASR polling timeout');
 }
 
 export default function ScenarioPractice() {
@@ -124,6 +144,7 @@ export default function ScenarioPractice() {
   const [responses, setResponses] = useState<string[]>([])
   const [vMsg, setVMsg] = useState('')
   const [silent, setSilent] = useState(false)
+  const lastAudioRef = useRef<RecorderResult | null>(null)
 
   // ── 音频电平持续监测（用于 UI 场景中的静音提示）──
   const levelCheckRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -131,8 +152,9 @@ export default function ScenarioPractice() {
   const onStop = useCallback((r: RecorderResult) => {
     if (levelCheckRef.current) { clearInterval(levelCheckRef.current); levelCheckRef.current = null }
     setSilent(false)
+    lastAudioRef.current = r
     const e = recorder.validateRecording(r)
-    if (e) { setVMsg(e); setPhase('validationError'); setRecording(false); return }
+    if (e) { setVMsg(e); setPhase('validationError'); setRecording(false); lastAudioRef.current = null; return }
     setPhase('playback'); setRecording(false)
   }, [setRecording])
 
@@ -154,24 +176,60 @@ export default function ScenarioPractice() {
     return () => { if (levelCheckRef.current) { clearInterval(levelCheckRef.current); levelCheckRef.current = null } }
   }, [phase, recorder])
 
-  const submitScore = useCallback(() => {
+  const submitScore = useCallback(async () => {
     setPhase('analyzing'); setAP(0)
     const d = Math.round(recorder.elapsedMs / 1000)
-    const u = currentScenario?.dialogues[currentDialogueIndex]
-    if (u?.role === 'user') setResponses(p => [...p, u.text])
+    const audio = lastAudioRef.current
+
+    // 进度动画
     let p = 0
     timerRef.current = setInterval(() => {
-      p += Math.random() * 15 + 5
-      if (p >= 100) { p = 100; if (timerRef.current) clearInterval(timerRef.current)
-        const s = generateScore(d); if (currentScenario) s.scenarioTitle = currentScenario.title
-        setScoreResult(s); addScoreRecord(s); addDailyPractice(Math.round(d / 6)); setPhase('result') }
-      setAP(Math.min(100, p))
-    }, 200)
+      p += 4
+      if (p >= 30) { if (timerRef.current) clearInterval(timerRef.current) }
+      setAP(Math.min(95, p))
+    }, 120)
+
+    try {
+      if (!audio?.blob || audio.blob.size < 1024) throw new Error('No valid recording')
+
+      const scores = await callTranscribeAPI(audio.blob, audio.mimeType)
+
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+      setAP(100)
+
+      setResponses(p => [...p, scores.transcription || '(audio transcribed)'])
+
+      const sr: ScoreResult = {
+        accuracy: scores.accuracy, fluency: scores.fluency,
+        completeness: scores.completeness, total: scores.total,
+        errors: scores.errors, suggestions: scores.suggestions,
+        timestamp: Date.now(), scenarioTitle: currentScenario?.title || '',
+        transcription: scores.transcription,
+      }
+      setScoreResult(sr); addScoreRecord(sr); addDailyPractice(Math.round(d / 6))
+      setPhase('result')
+    } catch (e: any) {
+      console.error('ASR unavailable, offline fallback:', e.message)
+      if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
+      setAP(100)
+
+      const u = currentScenario?.dialogues[currentDialogueIndex]
+      if (u?.role === 'user') setResponses(p => [...p, u.text])
+
+      const sr: ScoreResult = {
+        accuracy: 0, fluency: 0, completeness: 0, total: 0,
+        errors: [`Service offline: ${e.message?.slice(0, 60) || 'unknown error'}`],
+        suggestions: ['Start dev API with: npm run dev:api', 'Or deploy to Vercel for full transcription'],
+        timestamp: Date.now(), scenarioTitle: currentScenario?.title || '',
+      }
+      setScoreResult(sr); addScoreRecord(sr); addDailyPractice(Math.round(d / 6))
+      setPhase('result')
+    }
   }, [recorder.elapsedMs, currentScenario, currentDialogueIndex, setScoreResult, addDailyPractice, addScoreRecord])
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [currentDialogueIndex, scoreResult, phase])
   useEffect(() => { return () => { if (timerRef.current) clearInterval(timerRef.current) } }, [])
-  useEffect(() => { setPhase('idle'); setVMsg(''); recorder.cancelRecording() }, [currentDialogueIndex])
+  useEffect(() => { setPhase('idle'); setVMsg(''); recorder.cancelRecording(); lastAudioRef.current = null }, [currentDialogueIndex])
   useEffect(() => { if (recorder.isError && phase === 'recording') { setPhase('micError'); setRecording(false) } }, [recorder.isError, recorder.state, phase, setRecording])
 
   const beginRecord = async () => { setPhase('recording'); setRecording(true); setSilent(false); await recorder.startRecording() }
@@ -281,6 +339,7 @@ export default function ScenarioPractice() {
         <div className="text-center pt-2"><div className="text-4xl font-bold text-yellow-400">{scoreResult.total}</div><div className="text-xs text-gray-400 mt-1">综合得分</div></div>
         {scoreResult.errors.length > 0 && (<div className="bg-slate-700/50 rounded-xl p-3"><p className="text-xs font-medium text-red-400 mb-1">错误识别</p>{scoreResult.errors.map((e, i) => <p key={i} className="text-xs text-gray-300">• {e}</p>)}</div>)}
         {scoreResult.suggestions.length > 0 && (<div className="bg-slate-700/50 rounded-xl p-3"><p className="text-xs font-medium text-emerald-400 mb-1">优化建议</p>{scoreResult.suggestions.map((s, i) => <p key={i} className="text-xs text-gray-300">• {s}</p>)}</div>)}
+        {scoreResult.transcription && (<div className="bg-slate-700/50 rounded-xl p-3"><p className="text-xs font-medium text-blue-400 mb-1">转写文本</p><p className="text-xs text-gray-200 leading-relaxed italic">"{scoreResult.transcription}"</p></div>)}
       </div>)}
 
       {/* ───── 场景完成 ───── */}
