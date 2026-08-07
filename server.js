@@ -51,6 +51,12 @@ if (FEISHU_APP_ID && FEISHU_APP_SECRET) {
   console.log('[Feishu] 未设置 FEISHU_APP_ID/FEISHU_APP_SECRET，将通过前端透传凭据');
 }
 
+// ── API Key 获取工具 ────────────────────────────────────────
+function getDashScopeKey(req) {
+  // 仅从服务器端环境变量获取，不从请求头读取
+  return DASHSCOPE_API_KEY;
+}
+
 // MIME 类型映射
 const MIME = {
   '.html': 'text/html; charset=utf-8',
