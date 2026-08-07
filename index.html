@@ -475,7 +475,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
     <label>飞书 App Secret <span style="color:var(--red)">*</span></label>
     <input type="password" id="cfgAppSecret" placeholder="••••••••">
     <label>Base Token <span style="color:var(--red)">*</span></label>
-    <input type="text" id="cfgBaseToken" placeholder="BqQUbqWIxapS7DsuMNocctOgncc">
+    <input type="text" id="cfgBaseToken" placeholder="ZgdibzjlCazLvRsFErnc5QcJnlc">
 
     <details style="margin-top:14px">
       <summary style="font-size:12px;color:var(--sub);cursor:pointer">表 ID 配置（可选，默认已配置）</summary>
@@ -543,14 +543,14 @@ async function loadConfig() {
     const fromDB = await DBBackup.getConfig('main');
     if (fromDB) return fromDB;
   } catch {}
-  return { appId: '', appSecret: '', baseToken: 'BqQUbqWIxapS7DsuMNocctOgncc', tables: { ...DEFAULT_TABLES } };
+  return { appId: '', appSecret: '', baseToken: 'ZgdibzjlCazLvRsFErnc5QcJnlc', tables: { ...DEFAULT_TABLES } };
 }
 function saveConfigObj(c) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(c));
   DBBackup.setConfig('main', c);
 }
 
-let cfg = { appId: '', appSecret: '', baseToken: 'BqQUbqWIxapS7DsuMNocctOgncc', tables: { ...DEFAULT_TABLES } };
+let cfg = { appId: '', appSecret: '', baseToken: 'ZgdibzjlCazLvRsFErnc5QcJnlc', tables: { ...DEFAULT_TABLES } };
 function hasCredentials() { return !!(cfg.appId && cfg.appSecret && cfg.baseToken); }
 
 // Auto-migrate old table IDs to new Base (2026-08-02)
@@ -1320,45 +1320,18 @@ const Engine = {
  *   AI CLIENT — OpenAI-compatible API
  * =================================================================== */
 const AIClient = {
-  get _isLocalhost() {
-    return location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-  },
   async chat(messages, options) {
     const aiCfg = (cfg && cfg.ai) || {};
-
-    // If running on localhost, route through our server proxy
-    // which reads DASHSCOPE_API_KEY from environment variable (no hardcoded key)
-    if (this._isLocalhost) {
-      const model = aiCfg.model || 'qwen3.7-max';
-      const resp = await fetch('/api/dashscope/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          messages,
-          temperature: options && options.temperature != null ? options.temperature : 0.3,
-          max_tokens: options && options.maxTokens != null ? options.maxTokens : 1024
-        })
-      });
-      if (!resp.ok) {
-        let msg = `HTTP ${resp.status}`;
-        try { const j = await resp.json(); msg = j.error?.message || JSON.stringify(j); } catch {}
-        throw new Error(msg);
-      }
-      const json = await resp.json();
-      return json.choices && json.choices[0] && json.choices[0].message ? json.choices[0].message.content : '';
-    }
-
-    // Fallback: direct API call (for non-localhost scenarios)
-    const baseUrl = (aiCfg.baseUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(/\/$/, '');
-    const apiKey = aiCfg.key || '';
     const model = aiCfg.model || 'qwen3.7-max';
-    if (!apiKey) throw new Error('未配置 AI API Key');
-    const resp = await fetch(`${baseUrl}/chat/completions`, {
+    const apiKey = aiCfg.key || '';
+
+    if (!apiKey) throw new Error('\u672a\u914d\u7f6e AI API Key');
+
+    const resp = await fetch('/api/dashscope/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
+        'X-DashScope-Key': apiKey,
       },
       body: JSON.stringify({
         model,
@@ -2520,7 +2493,7 @@ function openSettings() {
   document.getElementById('settingsModal').classList.remove('hidden');
   document.getElementById('cfgAppId').value = cfg.appId || '';
   document.getElementById('cfgAppSecret').value = cfg.appSecret || '';
-  document.getElementById('cfgBaseToken').value = cfg.baseToken || 'BqQUbqWIxapS7DsuMNocctOgncc';
+  document.getElementById('cfgBaseToken').value = cfg.baseToken || 'ZgdibzjlCazLvRsFErnc5QcJnlc';
   document.getElementById('cfgTableBill').value = cfg.tables.bill || '';
   document.getElementById('cfgTableHabit').value = cfg.tables.habit || '';
   document.getElementById('cfgTableRead').value = cfg.tables.read || '';
@@ -2538,7 +2511,7 @@ function closeSettings() { document.getElementById('settingsModal').classList.ad
 function saveSettings() {
   cfg.appId = document.getElementById('cfgAppId').value.trim();
   cfg.appSecret = document.getElementById('cfgAppSecret').value.trim();
-  cfg.baseToken = document.getElementById('cfgBaseToken').value.trim() || 'BqQUbqWIxapS7DsuMNocctOgncc';
+  cfg.baseToken = document.getElementById('cfgBaseToken').value.trim() || 'ZgdibzjlCazLvRsFErnc5QcJnlc';
   cfg.tables.bill = document.getElementById('cfgTableBill').value.trim();
   cfg.tables.habit = document.getElementById('cfgTableHabit').value.trim();
   cfg.tables.read = document.getElementById('cfgTableRead').value.trim();
@@ -2745,7 +2718,7 @@ function learnFromLastSave(module, data) {
   if (!cfg.ai) cfg.ai = {};
   if (!cfg.ai.baseUrl) cfg.ai.baseUrl = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
   if (!cfg.ai.model) cfg.ai.model = 'qwen3.7-max';
-  if (!cfg.baseToken) cfg.baseToken = 'BqQUbqWIxapS7DsuMNocctOgncc';
+  if (!cfg.baseToken) cfg.baseToken = 'ZgdibzjlCazLvRsFErnc5QcJnlc';
 
   // On first visit, auto-open settings
   if (!hasCredentials()) {

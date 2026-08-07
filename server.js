@@ -111,11 +111,12 @@ function serveStatic(req, res) {
 
 function proxyToDashScope(req, res) {
   // /api/dashscope/chat/completions → /compatible-mode/v1/chat/completions
+  const apiKey = getDashScopeKey(req);
   const targetPath = req.url.replace(/^\/api\/dashscope/, '/compatible-mode/v1');
 
-  if (!DASHSCOPE_API_KEY) {
+  if (!apiKey) {
     res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ error: { message: '服务端未配置 DASHSCOPE_API_KEY 环境变量' } }));
+    res.end(JSON.stringify({ error: { message: '服务端未配置 DASHSCOPE_API_KEY（环境变量和请求头均缺失）' } }));
     return;
   }
 
@@ -127,7 +128,7 @@ function proxyToDashScope(req, res) {
       'host': DASHSCOPE_HOST,
       'accept': 'application/json',
       'content-type': 'application/json',
-      'authorization': `Bearer ${DASHSCOPE_API_KEY}`,
+      'authorization': `Bearer ${apiKey}`,
     };
 
     const options = {
@@ -154,7 +155,7 @@ function proxyToDashScope(req, res) {
       }
       resHeaders['Access-Control-Allow-Origin'] = '*';
       resHeaders['Access-Control-Allow-Methods'] = 'GET, POST, PUT, OPTIONS';
-      resHeaders['Access-Control-Allow-Headers'] = 'Content-Type, Authorization';
+      resHeaders['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-DashScope-Key';
 
       res.writeHead(proxyRes.statusCode, resHeaders);
 
@@ -164,21 +165,19 @@ function proxyToDashScope(req, res) {
       });
     });
 
-    proxyReq.on('error', (err) => {
-      console.error('[DashScope Error]', err.message);
+    proxyReq.on('error', (e) => {
+      console.error('[DashScope Error]', e.message);
       res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ error: { message: 'DashScope 代理连接失败: ' + err.message } }));
+      res.end(JSON.stringify({ error: { message: 'DashScope 请求失败: ' + e.message } }));
     });
 
     proxyReq.on('timeout', () => {
       proxyReq.destroy();
       res.writeHead(504, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ error: { message: 'DashScope 代理连接超时' } }));
+      res.end(JSON.stringify({ error: { message: 'DashScope 请求超时' } }));
     });
 
-    if (rawBody) {
-      proxyReq.write(rawBody);
-    }
+    proxyReq.write(rawBody);
     proxyReq.end();
   });
 }
@@ -232,7 +231,7 @@ function proxyToFeishu(req, res) {
       }
       resHeaders['Access-Control-Allow-Origin'] = '*';
       resHeaders['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
-      resHeaders['Access-Control-Allow-Headers'] = 'Content-Type, Authorization';
+      resHeaders['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-DashScope-Key';
 
       res.writeHead(proxyRes.statusCode, resHeaders);
 
@@ -372,7 +371,7 @@ function parseMultipartFile(bodyBuffer, boundary) {
   return null;
 }
 
-function submitAudioToParaformer(audioBuffer, filename, localUrl) {
+function submitAudioToParaformer(audioBuffer, filename, localUrl, apiKey) {
   return new Promise((resolve, reject) => {
     // Paraformer 异步转写需要 JSON body，参数为 file_urls（不可直接上传文件流）
     const postData = JSON.stringify({
@@ -388,7 +387,7 @@ function submitAudioToParaformer(audioBuffer, filename, localUrl) {
       path: '/api/v1/services/audio/asr/transcription',
       method: 'POST',
       headers: {
-        'Authorization': 'Bearer ' + DASHSCOPE_API_KEY,
+        'Authorization': 'Bearer ' + apiKey,
         'Content-Type': 'application/json',
         'Content-Length': String(Buffer.byteLength(postData)),
         'X-DashScope-Async': 'enable',
@@ -424,7 +423,7 @@ function submitAudioToParaformer(audioBuffer, filename, localUrl) {
   });
 }
 
-function pollTranscriptionTask(taskId, maxWaitMs) {
+function pollTranscriptionTask(taskId, maxWaitMs, apiKey) {
   return new Promise((resolve, reject) => {
     const startTime = Date.now();
     const pollInterval = 800;
@@ -441,7 +440,7 @@ function pollTranscriptionTask(taskId, maxWaitMs) {
         port: 443,
         path: '/api/v1/tasks/' + taskId,
         method: 'GET',
-        headers: { 'Authorization': 'Bearer ' + DASHSCOPE_API_KEY },
+        headers: { 'Authorization': 'Bearer ' + apiKey },
         timeout: 10000,
       };
 
@@ -515,9 +514,10 @@ function fetchTranscriptionResult(url) {
 }
 
 function proxyToTranscribe(req, res) {
-  if (!DASHSCOPE_API_KEY) {
+  const apiKey = getDashScopeKey(req);
+  if (!apiKey) {
     res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ error: { message: '服务端未配置 DASHSCOPE_API_KEY 环境变量' } }));
+    res.end(JSON.stringify({ error: { message: '服务端未配置 DASHSCOPE_API_KEY（环境变量和请求头均缺失）' } }));
     return;
   }
 
@@ -556,11 +556,11 @@ function proxyToTranscribe(req, res) {
       console.log(`[Transcribe] 文件 URL: ${localUrl}`);
 
       // 2. 提交转写任务（使用 file_urls）
-      const taskId = await submitAudioToParaformer(parsed.buffer, parsed.filename, localUrl);
+      const taskId = await submitAudioToParaformer(parsed.buffer, parsed.filename, localUrl, apiKey);
       console.log(`[Transcribe] 任务已创建: ${taskId}`);
 
       // 3. 轮询等待结果（最多等待 40 秒）
-      const text = await pollTranscriptionTask(taskId, 40000);
+      const text = await pollTranscriptionTask(taskId, 40000, apiKey);
       console.log(`[Transcribe] ✅ 最终文本: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
 
       res.writeHead(200, {
@@ -593,7 +593,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-DashScope-Key',
     });
     res.end();
     return;

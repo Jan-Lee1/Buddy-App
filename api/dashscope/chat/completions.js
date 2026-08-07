@@ -8,6 +8,12 @@ const https = require('https');
 const DASHSCOPE_HOST = 'dashscope.aliyuncs.com';
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || '';
 
+/* Get API Key (env var first, then X-DashScope-Key header) */
+function getApiKey(req) {
+  if (DASHSCOPE_API_KEY) return DASHSCOPE_API_KEY;
+  return (req.headers['x-dashscope-key'] || req.headers['X-DashScope-Key'] || '').trim();
+}
+
 function safeSend(res, status, data) {
   if (res.headersSent) {
     console.warn('[DashScope Vercel] 响应已发送，跳过重复写入');
@@ -19,7 +25,7 @@ function safeSend(res, status, data) {
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-DashScope-Key');
 
   if (req.method === 'OPTIONS') {
     res.status(204).end();
@@ -31,8 +37,9 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  if (!DASHSCOPE_API_KEY) {
-    safeSend(res, 500, { error: { message: '服务端未配置 DASHSCOPE_API_KEY' } });
+  const apiKey = getApiKey(req);
+  if (!apiKey) {
+    safeSend(res, 500, { error: { message: '服务端未配置 DASHSCOPE_API_KEY（环境变量和请求头均缺失）' } });
     return;
   }
 
@@ -52,7 +59,7 @@ module.exports = async function handler(req, res) {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + DASHSCOPE_API_KEY,
+          'Authorization': 'Bearer ' + apiKey,
           'Content-Length': String(Buffer.byteLength(body)),
         },
         timeout: 55000,

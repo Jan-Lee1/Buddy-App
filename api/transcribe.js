@@ -10,6 +10,12 @@ const https = require('https');
 const DASHSCOPE_HOST = 'dashscope.aliyuncs.com';
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || '';
 
+/* Get API Key (env var first, then X-DashScope-Key header) */
+function getApiKey(req) {
+  if (DASHSCOPE_API_KEY) return DASHSCOPE_API_KEY;
+  return (req.headers['x-dashscope-key'] || req.headers['X-DashScope-Key'] || '').trim();
+}
+
 /* ── 提取 boundary ── */
 function extractBoundary(contentType) {
   if (!contentType) return null;
@@ -73,7 +79,7 @@ function getMimeType(filename) {
 }
 
 /* ── OpenAI 兼容端点转写 (multipart/form-data) ── */
-function transcribeWithOpenAIEndpoint(fileBuffer, filename) {
+function transcribeWithOpenAIEndpoint(fileBuffer, filename, apiKey) {
   return new Promise((resolve, reject) => {
     const mimeType = getMimeType(filename);
     const boundary = '----DashScopeBoundary' + Date.now();
@@ -98,7 +104,7 @@ function transcribeWithOpenAIEndpoint(fileBuffer, filename) {
       path: '/compatible-mode/v1/audio/transcriptions',
       method: 'POST',
       headers: {
-        'Authorization': 'Bearer ' + DASHSCOPE_API_KEY,
+        'Authorization': 'Bearer ' + apiKey,
         'Content-Type': 'multipart/form-data; boundary=' + boundary,
         'Content-Length': String(body.length),
       },
@@ -142,13 +148,15 @@ function safeJson(res, status, payload) {
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-DashScope-Key');
 
   if (req.method === 'OPTIONS') { res.status(204).end(); return; }
   if (req.method !== 'POST') { safeJson(res, 405, { text: '', error: '仅支持 POST' }); return; }
-  if (!DASHSCOPE_API_KEY) {
-    console.error('[Transcribe Vercel] 未配置 DASHSCOPE_API_KEY');
-    safeJson(res, 500, { text: '', error: '服务端未配置 DashScope API 密钥' });
+
+  const apiKey = getApiKey(req);
+  if (!apiKey) {
+    console.error('[Transcribe Vercel] 未配置 DashScope API Key（环境变量和请求头均缺失）');
+    safeJson(res, 500, { text: '', error: '服务端未配置 DashScope API Key' });
     return;
   }
 
@@ -197,7 +205,7 @@ module.exports = async function handler(req, res) {
     }
 
     console.log(`[Transcribe Vercel] 文件: ${filename}, 大小: ${(audioBuffer.length / 1024).toFixed(1)}KB`);
-    const text = await transcribeWithOpenAIEndpoint(audioBuffer, filename);
+    const text = await transcribeWithOpenAIEndpoint(audioBuffer, filename, apiKey);
     console.log(`[Transcribe Vercel] 转写成功: "${text}"`);
     safeJson(res, 200, { text });
 
