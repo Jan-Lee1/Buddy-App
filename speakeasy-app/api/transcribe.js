@@ -4,12 +4,13 @@
  * 返回 { task_id }，前端用 /api/transcribe-status 轮询
  */
 
+import https from 'https';
+
 const DASHSCOPE_KEY = process.env.DASHSCOPE_API_KEY || '';
 
 // 简易 HTTPS 请求封装
 function httpsRequest(opts, body) {
   return new Promise((resolve, reject) => {
-    const https = require('https');
     const req = https.request({ ...opts, timeout: 25000 }, (res) => {
       const chunks = [];
       res.on('data', (d) => chunks.push(d));

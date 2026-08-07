@@ -3,11 +3,12 @@
  * 查询 DashScope 异步 ASR 任务 → 获取转写文本 → Qwen 评分分析
  */
 
+import https from 'https';
+
 const DASHSCOPE_KEY = process.env.DASHSCOPE_API_KEY || '';
 
 function httpsRequest(opts, body) {
   return new Promise((resolve, reject) => {
-    const https = require('https');
     const req = https.request({ ...opts, timeout: 25000 }, (res) => {
       const chunks = [];
       res.on('data', (d) => chunks.push(d));
@@ -25,7 +26,6 @@ function httpsRequest(opts, body) {
 
 function httpGet(url) {
   return new Promise((resolve, reject) => {
-    const https = require('https');
     https.get(url, { timeout: 15000 }, (res) => {
       const chunks = [];
       res.on('data', (d) => chunks.push(d));
@@ -123,6 +123,24 @@ function fallbackScoring(text) {
     errors: words < 5 ? ['Response too short - try to speak more'] : [],
     suggestions: words < 8 ? ['Expand your answers with more detail', 'Use complete sentences'] : ['Good job! Keep practicing to improve fluency.'],
   };
+}
+
+// 查询 DashScope 异步任务状态
+async function pollTask(taskId) {
+  const result = await httpsRequest(
+    {
+      hostname: 'dashscope.aliyuncs.com',
+      path: '/api/v1/tasks/' + taskId,
+      method: 'GET',
+      headers: {
+        'Authorization': 'Bearer ' + DASHSCOPE_KEY,
+      },
+    }
+  );
+  if (result.status !== 200) {
+    throw new Error('DashScope polling failed: HTTP ' + result.status + ' - ' + result.body.substring(0, 300));
+  }
+  return JSON.parse(result.body);
 }
 
 // ─── Handler ───
