@@ -3,7 +3,7 @@
  * /api/* → open.feishu.cn/open-apis/*
  * 注意：具体路由如 /api/transcribe, /api/dashscope/chat/completions, /api/feishu/token 优先于此 catch-all
  */
-
+console.log("CATCH ALL API LOADED");
 const https = require('https');
 const FEISHU_HOST = 'open.feishu.cn';
 
