@@ -390,55 +390,49 @@ function getMimeType(filename) {
   return 'audio/webm';
 }
 
-// ── 上传音频到 uguu.se 免费临时文件服务 ──
-function uploadToUguu(audioBuffer, filename, mimeType) {
+// ── 上传音频到 litterbox.catbox.moe 免费临时文件服务 ──
+function uploadToLitterbox(audioBuffer, filename, mimeType) {
   return new Promise((resolve, reject) => {
-    const boundary = '----Uguu' + Date.now() + Math.random().toString(36).slice(2);
-    const crlf = '\r\n';
-    const parts = [];
-    parts.push(Buffer.from('--' + boundary + crlf));
-    parts.push(Buffer.from('Content-Disposition: form-data; name="files[]"; filename="' + filename + '"' + crlf));
-    parts.push(Buffer.from('Content-Type: ' + mimeType + crlf + crlf));
-    parts.push(audioBuffer);
-    parts.push(Buffer.from(crlf + '--' + boundary + '--' + crlf));
-    const body = Buffer.concat(parts);
+    const boundary = '----LB' + Date.now() + Math.random().toString(36).slice(2);
+    const CR = '\r\n';
+    const formBody = Buffer.concat([
+      Buffer.from('--' + boundary + CR + 'Content-Disposition: form-data; name="reqtype"' + CR + CR + 'fileupload' + CR),
+      Buffer.from('--' + boundary + CR + 'Content-Disposition: form-data; name="time"' + CR + CR + '1h' + CR),
+      Buffer.from('--' + boundary + CR + 'Content-Disposition: form-data; name="fileToUpload"; filename="' + filename + '"' + CR + 'Content-Type: ' + mimeType + CR + CR),
+      audioBuffer,
+      Buffer.from(CR + '--' + boundary + '--' + CR),
+    ]);
 
-    console.log(`[Uguu] 上传 ${filename} (${(audioBuffer.length / 1024).toFixed(1)}KB) 到 uguu.se`);
+    console.log(`[Litterbox] 上传 ${filename} (${(audioBuffer.length / 1024).toFixed(1)}KB) 到 litterbox.catbox.moe`);
 
     const req = https.request({
-      hostname: 'uguu.se',
-      path: '/upload',
+      hostname: 'litterbox.catbox.moe',
+      path: '/resources/internals/api.php',
       method: 'POST',
       headers: {
         'Content-Type': 'multipart/form-data; boundary=' + boundary,
-        'Content-Length': String(body.length),
-        'Accept': 'application/json',
+        'Content-Length': String(formBody.length),
+        'User-Agent': 'PersonalManager/1.0',
       },
-      rejectUnauthorized: false,
-      ALPNProtocols: ['http/1.1'],
+      family: 4,
       timeout: 30000,
     }, (res) => {
       let d = '';
       res.on('data', (c) => d += c);
       res.on('end', () => {
-        console.log(`[Uguu] HTTP ${res.statusCode}: ${d.substring(0, 200)}`);
-        try {
-          const json = JSON.parse(d);
-          if (json.success && json.files && json.files.length > 0) {
-            const url = json.files[0].url;
-            console.log(`[Uguu] ✅ 上传成功: ${url}`);
-            resolve(url);
-          } else {
-            reject(new Error('uguu.se 上传失败: ' + (json.description || '未知错误')));
-          }
-        } catch (e) {
-          reject(new Error('uguu.se 响应解析失败: ' + d.substring(0, 200)));
+        console.log(`[Litterbox] HTTP ${res.statusCode}: ${d.substring(0, 200)}`);
+        const url = d.trim();
+        if (url.startsWith('https://')) {
+          console.log(`[Litterbox] ✅ 上传成功: ${url}`);
+          resolve(url);
+        } else {
+          reject(new Error('litterbox 上传失败: ' + d.substring(0, 200)));
         }
       });
     });
-    req.on('error', (e) => reject(new Error('uguu.se 网络错误: ' + e.message)));
-    req.on('timeout', () => { req.destroy(); reject(new Error('uguu.se 上传超时')); });
-    req.write(body);
+    req.on('error', (e) => reject(new Error('litterbox 网络错误: ' + e.message)));
+    req.on('timeout', () => { req.destroy(); reject(new Error('litterbox 上传超时')); });
+    req.write(formBody);
     req.end();
   });
 }
@@ -463,6 +457,7 @@ function submitTranscriptionTask(fileUrl, apiKey) {
         'Content-Length': String(Buffer.byteLength(payload)),
         'X-DashScope-Async': 'enable',
       },
+      family: 4,
       timeout: 30000,
     }, (res) => {
       let d = '';
@@ -500,6 +495,7 @@ function queryTranscriptionTask(taskId, apiKey) {
       hostname: DASHSCOPE_HOST,
       path: urlPath,
       headers: { 'Authorization': 'Bearer ' + apiKey },
+      family: 4,
       timeout: 20000,
     }, (res) => {
       let d = '';
@@ -510,14 +506,16 @@ function queryTranscriptionTask(taskId, apiKey) {
           const taskStatus = json.output && json.output.task_status;
 
           if (taskStatus === 'SUCCEEDED') {
-            // 任务完成，获取 transcription_url
+            // 任务完成，获取 transcription_url（多层嵌套结构）
             const results = json.output.results || [];
-            if (results.length > 0 && results[0].transcription_url) {
-              const transUrl = results[0].transcription_url;
+            const transUrl =
+              results[0]?.transcription_url ||
+              results[0]?.output?.results?.[0]?.transcription_url;
+            if (transUrl) {
               console.log(`[DashScope ASR] 任务完成，transcription_url: ${transUrl}`);
 
               // 下载转写结果
-              https.get(transUrl, (res2) => {
+              https.get(transUrl, { family: 4 }, (res2) => {
                 let d2 = '';
                 res2.on('data', (c) => d2 += c);
                 res2.on('end', () => {
@@ -588,8 +586,8 @@ function proxyToTranscribe(req, res) {
       const mime = getMimeType(parsed.filename);
       console.log(`[Transcribe] 音频: ${(parsed.buffer.length / 1024).toFixed(1)}KB, MIME: ${mime}`);
 
-      // Step 1: 上传到 uguu.se 获取公网 URL
-      const publicUrl = await uploadToUguu(parsed.buffer, parsed.filename, mime);
+      // Step 1: 上传到 litterbox.catbox.moe 获取公网 URL
+      const publicUrl = await uploadToLitterbox(parsed.buffer, parsed.filename, mime);
 
       // Step 2: 提交 DashScope 异步转写任务
       const taskId = await submitTranscriptionTask(publicUrl, apiKey);
