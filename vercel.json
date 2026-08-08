@@ -1,5 +1,12 @@
 {
   "version": 2,
+
+  "rewrites": [
+    {
+      "source": "/api/bitable/:path*",
+      "destination": "/api/[...path]"
+    }
+  ],
   "functions": {
     "api/transcribe.js": {
       "memory": 512,
