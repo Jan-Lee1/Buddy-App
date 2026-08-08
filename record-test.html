@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>录音测试 — ASR Phase 1</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f172a; color: #e2e8f0; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .card {
+    background: #1e293b; border-radius: 16px; padding: 40px;
+    max-width: 480px; width: 100%; box-shadow: 0 25px 80px rgba(0,0,0,0.4);
+  }
+  h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 6px; color: #f8fafc; }
+  .subtitle { font-size: 0.85rem; color: #94a3b8; margin-bottom: 28px; }
+  .status-bar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 18px; border-radius: 10px; margin-bottom: 20px;
+    background: #0f172a; font-size: 0.9rem;
+  }
+  .status-dot {
+    width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+    background: #475569; transition: background 0.3s;
+  }
+  .status-dot.idle { background: #475569; }
+  .status-dot.recording { background: #ef4444; animation: pulse 1s infinite; }
+  .status-dot.saved { background: #22c55e; }
+  .status-dot.error { background: #f59e0b; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  .timer { font-size: 2.2rem; font-weight: 700; text-align: center; margin-bottom: 24px;
+    font-variant-numeric: tabular-nums; color: #f8fafc; letter-spacing: 2px; }
+  .btn-row { display: flex; gap: 12px; margin-bottom: 14px; }
+  button {
+    flex: 1; padding: 14px 0; border-radius: 10px; border: none;
+    font-size: 0.95rem; font-weight: 600; cursor: pointer;
+    transition: all 0.2s; letter-spacing: 0.3px;
+  }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-record {
+    background: #ef4444; color: #fff;
+  }
+  .btn-record:hover:not(:disabled) { background: #dc2626; }
+  .btn-record.recording {
+    background: #dc2626;
+  }
+  .btn-download { background: #3b82f6; color: #fff; }
+  .btn-download:hover:not(:disabled) { background: #2563eb; }
+  .btn-reset { background: #334155; color: #cbd5e1; }
+  .btn-reset:hover:not(:disabled) { background: #475569; }
+
+  .info-box {
+    background: #0f172a; border-radius: 10px; padding: 16px 18px;
+    font-size: 0.82rem; color: #94a3b8; line-height: 1.7;
+  }
+  .info-box strong { color: #e2e8f0; }
+  .info-box code {
+    background: #334155; padding: 2px 7px; border-radius: 5px;
+    font-size: 0.8rem; color: #f1f5f9;
+  }
+  .audio-preview { width: 100%; margin-top: 14px; border-radius: 8px; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h1>🎙️ 录音测试工具</h1>
+  <p class="subtitle">录制真实语音 → 下载 webm → 运行 verify-speech-asr.js</p>
+
+  <div class="status-bar">
+    <div class="status-dot idle" id="statusDot"></div>
+    <span id="statusText">就绪 — 点击录制按钮开始</span>
+  </div>
+
+  <div class="timer" id="timer">00:00</div>
+
+  <div class="btn-row">
+    <button class="btn-record" id="btnRecord" onclick="toggleRecord()">🔴 开始录制</button>
+  </div>
+  <div class="btn-row">
+    <button class="btn-download" id="btnDownload" disabled onclick="download()">💾 下载 webm</button>
+    <button class="btn-reset" onclick="resetAll()">🔄 重置</button>
+  </div>
+
+  <div class="info-box">
+    <strong>录音要求：</strong><br>
+    • 使用 Chrome 浏览器（Edge 也可）<br>
+    • 录制 <strong>3-5 秒</strong> 清晰的中文或英文语音<br>
+    • 环境安静，音量适中<br>
+    • 下载后运行 <code>node verify-speech-asr.js 录制文件.webm</code>
+  </div>
+
+  <audio class="audio-preview" id="audioPreview" controls style="display:none"></audio>
+</div>
+
+<script>
+let mediaRecorder = null;
+let audioChunks = [];
+let startTime = 0;
+let timerInterval = null;
+let recordedBlob = null;
+
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+const timerEl = document.getElementById('timer');
+const btnRecord = document.getElementById('btnRecord');
+const btnDownload = document.getElementById('btnDownload');
+const audioPreview = document.getElementById('audioPreview');
+
+function setStatus(state, text) {
+  statusDot.className = 'status-dot ' + state;
+  statusText.textContent = text;
+}
+
+function formatTime(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+}
+
+async function toggleRecord() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    // 停止录制
+    mediaRecorder.stop();
+    clearInterval(timerInterval);
+    btnRecord.textContent = '🔴 开始录制';
+    btnRecord.classList.remove('recording');
+    setStatus('saved', '录制完成 — 可下载或重新录制');
+    btnDownload.disabled = false;
+    return;
+  }
+
+  // 开始录制
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // 优先使用 webm/opus（Chrome 默认），其次 webm 通用
+    let mimeType = 'audio/webm;codecs=opus';
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+      mimeType = 'audio/webm';
+    }
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+      mimeType = ''; // let browser choose
+    }
+
+    mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+    audioChunks = [];
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = () => {
+      recordedBlob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
+      audioPreview.src = URL.createObjectURL(recordedBlob);
+      audioPreview.style.display = 'block';
+
+      // 停止所有轨道
+      stream.getTracks().forEach(t => t.stop());
+    };
+
+    mediaRecorder.start();
+    startTime = Date.now();
+    timerInterval = setInterval(updateTimer, 200);
+
+    btnRecord.textContent = '⏹️ 停止录制';
+    btnRecord.classList.add('recording');
+    setStatus('recording', '录制中... 说几句话然后点击停止');
+    btnDownload.disabled = true;
+    audioPreview.style.display = 'none';
+
+  } catch (err) {
+    console.error(err);
+    setStatus('error', '麦克风权限被拒绝: ' + err.message);
+  }
+}
+
+function updateTimer() {
+  const elapsed = (Date.now() - startTime) / 1000;
+  timerEl.textContent = formatTime(elapsed);
+}
+
+function download() {
+  if (!recordedBlob) return;
+  const url = URL.createObjectURL(recordedBlob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'test-recording-' + Date.now() + '.webm';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function resetAll() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+  }
+  clearInterval(timerInterval);
+  recordedBlob = null;
+  audioChunks = [];
+  audioPreview.style.display = 'none';
+  audioPreview.src = '';
+  timerEl.textContent = '00:00';
+  btnRecord.textContent = '🔴 开始录制';
+  btnRecord.classList.remove('recording');
+  btnDownload.disabled = true;
+  setStatus('idle', '就绪 — 点击录制按钮开始');
+}
+</script>
+</body>
+</html>
