@@ -3,11 +3,14 @@
  * /api/* → open.feishu.cn/open-apis/*
  * 注意：具体路由如 /api/transcribe, /api/dashscope/chat/completions, /api/feishu/token 优先于此 catch-all
  */
-
+console.log("catch-all loaded");
 const https = require('https');
 const FEISHU_HOST = 'open.feishu.cn';
 
 module.exports = async function handler(req, res) {
+
+  console.log("catch-all loaded");
+  console.log("URL:", req.url);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
