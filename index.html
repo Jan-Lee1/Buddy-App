@@ -949,10 +949,10 @@ const FeishuAPI = {
     return json.data;
   },
 
-  async createRecord(tableId, fields) { return this._call('POST', `/bitable/v1/apps/${cfg.baseToken}/tables/${tableId}/records`, { fields }); },
-  async listRecords(tableId, params) { const qs = new URLSearchParams(params || {}).toString(); return this._call('GET', `/bitable/v1/apps/${cfg.baseToken}/tables/${tableId}/records${qs ? '?' + qs : ''}`); },
-  async updateRecord(tableId, recordId, fields) { return this._call('PUT', `/bitable/v1/apps/${cfg.baseToken}/tables/${tableId}/records/${recordId}`, { fields }); },
-  async deleteRecord(tableId, recordId) { return this._call('DELETE', `/bitable/v1/apps/${cfg.baseToken}/tables/${tableId}/records/${recordId}`); }
+    async createRecord(tableId, fields) { return this._call('POST', `/v1/apps/${cfg.baseToken}/tables/${tableId}/records`, { fields }); },
+    async listRecords(tableId, params) { const qs = new URLSearchParams(params || {}).toString(); return this._call('GET', `/v1/apps/${cfg.baseToken}/tables/${tableId}/records${qs ? '?' + qs : ''}`); },
+    async updateRecord(tableId, recordId, fields) { return this._call('PUT', `/v1/apps/${cfg.baseToken}/tables/${tableId}/records/${recordId}`, { fields }); },
+    async deleteRecord(tableId, recordId) { return this._call('DELETE', `/v1/apps/${cfg.baseToken}/tables/${tableId}/records/${recordId}`); }
 };
 
 /* ===================================================================
