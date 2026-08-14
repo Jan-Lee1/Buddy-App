@@ -23,7 +23,7 @@ module.exports = async function handler(req, res) {
       const pathSegments = req.query.path;
       apiPath = Array.isArray(pathSegments) ? pathSegments.join('/') : pathSegments;
     } else {
-      const match = req.url.match(/^\/api\/bitable\/(.+?)(?:\?|$)/);
+      const match = req.url.match(/^\/api\/(.+?)(?:\?|$)/);
       if (match) {
         apiPath = match[1];
       }
