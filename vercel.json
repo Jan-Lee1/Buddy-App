@@ -21,11 +21,5 @@
       "memory": 256,
       "maxDuration": 30
     }
-  },
-  "rewrites": [
-    {
-      "source": "/api/bitable/:path*",
-      "destination": "/api/bitable/[...path].js"
-    }
-  ]
+  }
 }

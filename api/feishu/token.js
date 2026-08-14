@@ -77,7 +77,7 @@ module.exports = async function handler(req, res) {
 
     if (result.code === 0) {
       if (res.headersSent) return;
-      res.status(200).send(result.data);
+      res.status(200).setHeader('Content-Type', 'application/json').send(result.data);
     } else {
       console.error('[Feishu Token Vercel] 飞书返回错误:', result.data);
       safeSend(res, 500, { code: result.code || -1, msg: '飞书 API 返回错误' });
