@@ -1,7 +1,6 @@
 /**
  * Vercel Serverless: 飞书 API 代理（catch-all）
- * /api/* → open.feishu.cn/open-apis/*
- * 注意：具体路由如 /api/transcribe, /api/dashscope/chat/completions, /api/feishu/token 优先于此 catch-all
+ * /api/bitable/* → open.feishu.cn/open-apis/*
  */
 console.log("CATCH ALL API LOADED");
 const https = require('https');
@@ -18,9 +17,26 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    // 从 Vercel 动态路由获取路径
-    const pathSegments = req.query?.path;
-    const apiPath = Array.isArray(pathSegments) ? '/' + pathSegments.join('/') : '/' + (pathSegments || '');
+    // 修复：正确提取路径参数
+    let apiPath = '';
+    if (req.query && req.query.path) {
+      const pathSegments = req.query.path;
+      apiPath = Array.isArray(pathSegments) ? pathSegments.join('/') : pathSegments;
+    } else {
+      const match = req.url.match(/^\/api\/bitable\/(.+?)(?:\?|$)/);
+      if (match) {
+        apiPath = match[1];
+      }
+    }
+
+    if (!apiPath) {
+      res.status(400).json({ code: -1, msg: '缺少 API 路径' });
+      return;
+    }
+
+    if (!apiPath.startsWith('/')) {
+      apiPath = '/' + apiPath;
+    }
     const targetPath = '/open-apis' + apiPath;
 
     // 处理原始 URL 的 query string
@@ -28,7 +44,9 @@ module.exports = async function handler(req, res) {
     const queryIdx = fullUrl.indexOf('?');
     const targetPathWithQuery = queryIdx !== -1 ? targetPath + fullUrl.substring(queryIdx) : targetPath;
 
-    // 构建要转发的 headers（只保留必要 header，防止 Vercel 内部 header 泄漏）
+    console.log(`[Feishu Vercel] ${req.method} ${targetPathWithQuery}`);
+
+    // 构建要转发的 headers
     const cleanHeaders = { 'host': FEISHU_HOST };
     if (req.headers['content-type']) cleanHeaders['content-type'] = req.headers['content-type'];
     if (req.headers['authorization']) cleanHeaders['authorization'] = req.headers['authorization'];
@@ -51,8 +69,6 @@ module.exports = async function handler(req, res) {
         timeout: 25000,
       };
 
-      console.log(`[Feishu Vercel] ${req.method} ${targetPathWithQuery}`);
-
       const proxyReq = https.request(options, (proxyRes) => {
         const chunks = [];
 
@@ -62,7 +78,6 @@ module.exports = async function handler(req, res) {
           const dataBuffer = Buffer.concat(chunks);
           console.log(`[Feishu Vercel] ${proxyRes.statusCode} (${dataBuffer.length} bytes)`);
 
-          // 转发响应 headers（排除内部 headers）
           const resHeaders = {};
           for (const key of Object.keys(proxyRes.headers)) {
             const lower = key.toLowerCase();
