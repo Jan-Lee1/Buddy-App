@@ -1,25 +1,16 @@
 {
   "version": 2,
   "functions": {
-    "api/transcribe.js": {
-      "memory": 512,
-      "maxDuration": 30
-    },
-    "api/transcribe/status.js": {
-      "memory": 256,
-      "maxDuration": 15
-    },
-    "api/dashscope/chat/completions.js": {
-      "memory": 512,
-      "maxDuration": 60
-    },
-    "api/feishu/token.js": {
-      "memory": 256,
-      "maxDuration": 15
-    },
-    "api/[...path].js": {
-      "memory": 256,
-      "maxDuration": 30
+    "api/transcribe.js": { "memory": 512, "maxDuration": 30 },
+    "api/transcribe/status.js": { "memory": 256, "maxDuration": 15 },
+    "api/dashscope/chat/completions.js": { "memory": 512, "maxDuration": 60 },
+    "api/feishu/token.js": { "memory": 256, "maxDuration": 15 },
+    "api/[...path].js": { "memory": 256, "maxDuration": 30 }
+  },
+  "rewrites": [
+    {
+      "source": "/api/v1/:path*",
+      "destination": "/api/[...path].js?path=v1/:path*"
     }
-  }
+  ]
 }
