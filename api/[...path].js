@@ -23,7 +23,7 @@ module.exports = async function handler(req, res) {
       const pathSegments = req.query.path;
       apiPath = Array.isArray(pathSegments) ? pathSegments.join('/') : pathSegments;
     } else {
-      const match = req.url.match(/^\/api\/(.+?)(?:\?|$)/);
+      const match = req.url.match(/^\/api\/bitable\/(.+?)(?:\?|$)/);
       if (match) {
         apiPath = match[1];
       }
@@ -37,7 +37,7 @@ module.exports = async function handler(req, res) {
     if (!apiPath.startsWith('/')) {
       apiPath = '/' + apiPath;
     }
-    const targetPath = '/open-apis' + apiPath;
+    const targetPath = '/open-apis/bitable' + apiPath;
 
     // 处理原始 URL 的 query string
     const fullUrl = req.url || '';
