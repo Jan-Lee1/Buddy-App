@@ -1,6 +1,6 @@
 /**
  * Vercel Serverless: 飞书 API 代理（catch-all）
- * /api/bitable/* → open.feishu.cn/open-apis/*
+ * /api/bitable/* → open.feishu.cn/open-apis/bitable/*
  */
 console.log("CATCH ALL API LOADED");
 const https = require('https');
@@ -17,16 +17,19 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    // 修复：正确提取路径参数
+    // 提取路径参数
     let apiPath = '';
     if (req.query && req.query.path) {
       const pathSegments = req.query.path;
       apiPath = Array.isArray(pathSegments) ? pathSegments.join('/') : pathSegments;
     } else {
-      const match = req.url.match(/^\/api\/bitable\/(.+?)(?:\?|$)/);
-      if (match) {
-        apiPath = match[1];
-      }
+      const urlPath = req.url.split('?')[0];
+      apiPath = urlPath.replace(/^\/api\/?/, '');
+    }
+
+    // 如果路径以 bitable/ 开头，去掉它
+    if (apiPath.startsWith('bitable/')) {
+      apiPath = apiPath.substring(8);
     }
 
     if (!apiPath) {
