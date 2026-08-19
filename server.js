@@ -10,6 +10,7 @@
  */
 const http = require('http');
 const https = require('https');
+const crypto = require('crypto');
 const PORT = 3000;
 const STATIC_DIR = __dirname;
 
@@ -61,6 +62,11 @@ try {
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || '';
 const FEISHU_APP_ID = process.env.FEISHU_APP_ID || '';
 const FEISHU_APP_SECRET = process.env.FEISHU_APP_SECRET || '';
+const OSS_REGION = process.env.OSS_REGION || '';
+const OSS_BUCKET = process.env.OSS_BUCKET || '';
+const OSS_ACCESS_KEY_ID = process.env.OSS_ACCESS_KEY_ID || '';
+const OSS_ACCESS_KEY_SECRET = process.env.OSS_ACCESS_KEY_SECRET || '';
+const OSS_ENDPOINT = process.env.OSS_ENDPOINT || '';
 
 if (DASHSCOPE_API_KEY) {
   console.log('[DashScope] API Key 已从环境变量加载 (' + DASHSCOPE_API_KEY.substring(0, 8) + '***)');
@@ -413,110 +419,162 @@ function getMimeType(filename) {
   return 'audio/webm';
 }
 
+function getOssConfig() {
+  const missing = [];
+  if (!OSS_REGION) missing.push('OSS_REGION');
+  if (!OSS_BUCKET) missing.push('OSS_BUCKET');
+  if (!OSS_ACCESS_KEY_ID) missing.push('OSS_ACCESS_KEY_ID');
+  if (!OSS_ACCESS_KEY_SECRET) missing.push('OSS_ACCESS_KEY_SECRET');
+  if (missing.length) throw new Error('服务端未配置 OSS 环境变量: ' + missing.join(', '));
+
+  const endpoint = OSS_ENDPOINT || ('https://oss-' + OSS_REGION.replace(/^oss-/, '') + '.aliyuncs.com');
+  let endpointUrl;
+  try { endpointUrl = new URL(endpoint.includes('://') ? endpoint : 'https://' + endpoint); }
+  catch { throw new Error('OSS_ENDPOINT 格式无效'); }
+  const hostname = endpointUrl.hostname.startsWith(OSS_BUCKET + '.')
+    ? endpointUrl.hostname
+    : OSS_BUCKET + '.' + endpointUrl.hostname;
+  return { bucket: OSS_BUCKET, accessKeyId: OSS_ACCESS_KEY_ID, accessKeySecret: OSS_ACCESS_KEY_SECRET, hostname };
+}
+
+function ossSignature(method, contentType, dateOrExpires, resource, secret) {
+  const stringToSign = [method, '', contentType || '', dateOrExpires, resource].join('\n');
+  return crypto.createHmac('sha1', secret).update(stringToSign).digest('base64');
+}
+
+function uploadToOSS(audioBuffer, filename, mimeType) {
+  return new Promise((resolve, reject) => {
+    let config;
+    try { config = getOssConfig(); } catch (error) { reject(error); return; }
+    const ext = path.extname(filename || '').replace(/[^a-zA-Z0-9]/g, '') || 'webm';
+    const objectKey = 'asr/' + new Date().toISOString().slice(0, 10) + '/' + crypto.randomUUID() + '.' + ext;
+    const resource = '/' + config.bucket + '/' + objectKey;
+    const date = new Date().toUTCString();
+    const authorization = 'OSS ' + config.accessKeyId + ':' + ossSignature('PUT', mimeType, date, resource, config.accessKeySecret);
+    const encodedKey = objectKey.split('/').map(encodeURIComponent).join('/');
+    const uploadReq = https.request({
+      hostname: config.hostname, path: '/' + encodedKey, method: 'PUT',
+      headers: { 'Content-Type': mimeType, 'Content-Length': String(audioBuffer.length), Date: date, Authorization: authorization },
+      family: 4, timeout: 25000,
+    }, (uploadRes) => {
+      let data = ''; uploadRes.on('data', chunk => { data += chunk; });
+      uploadRes.on('end', () => {
+        if (uploadRes.statusCode >= 200 && uploadRes.statusCode < 300) {
+          const expires = String(Math.floor(Date.now() / 1000) + 20 * 60);
+          const signature = ossSignature('GET', '', expires, resource, config.accessKeySecret);
+          const query = new URLSearchParams({ OSSAccessKeyId: config.accessKeyId, Expires: expires, Signature: signature });
+          // The bucket remains private. Configure an OSS lifecycle rule to delete asr/ objects after a short retention period.
+          resolve('https://' + config.hostname + '/' + encodedKey + '?' + query.toString());
+        } else {
+          reject(new Error('OSS 上传失败: HTTP ' + uploadRes.statusCode + ' ' + data.substring(0, 200)));
+        }
+      });
+    });
+    uploadReq.on('error', error => reject(new Error('OSS 网络错误: ' + error.message)));
+    uploadReq.on('timeout', () => { uploadReq.destroy(); reject(new Error('OSS 上传超时')); });
+    uploadReq.write(audioBuffer); uploadReq.end();
+  });
+}
+
+function submitTranscriptionTask(fileUrl, apiKey) {
+  return new Promise((resolve, reject) => {
+    const payload = JSON.stringify({ model: 'paraformer-v2', input: { file_urls: [fileUrl] } });
+    const taskReq = https.request({
+      hostname: DASHSCOPE_HOST, path: '/api/v1/services/audio/asr/transcription', method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(payload)), 'X-DashScope-Async': 'enable' },
+      family: 4, timeout: 25000,
+    }, (taskRes) => {
+      let data = ''; taskRes.on('data', chunk => { data += chunk; });
+      taskRes.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (json.output && json.output.task_id) resolve(json.output.task_id);
+          else if (json.code) reject(new Error('DashScope: ' + json.code + ' - ' + (json.message || '')));
+          else reject(new Error('DashScope 未返回 task_id'));
+        } catch { reject(new Error('DashScope 响应异常')); }
+      });
+    });
+    taskReq.on('error', error => reject(new Error('DashScope 网络错误: ' + error.message)));
+    taskReq.on('timeout', () => { taskReq.destroy(); reject(new Error('DashScope 超时')); });
+    taskReq.write(payload); taskReq.end();
+  });
+}
+
+function requestText(options) {
+  return new Promise((resolve, reject) => {
+    const request = https.get({ ...options, family: 4 }, response => {
+      let body = ''; response.on('data', chunk => { body += chunk; });
+      response.on('end', () => resolve({ status: response.statusCode, body }));
+    });
+    request.on('error', reject);
+    request.on('timeout', () => { request.destroy(); reject(new Error('请求超时')); });
+  });
+}
+
+async function handleTranscribeStatus(req, res) {
+  const apiKey = getDashScopeKey(req);
+  const url = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
+  const taskId = url.searchParams.get('taskId') || url.searchParams.get('task_id') || '';
+  if (!apiKey) return sendTranscribeJson(res, 500, { error: { message: '服务端未配置 DASHSCOPE_API_KEY' } });
+  if (!taskId) return sendTranscribeJson(res, 400, { error: { message: '缺少 taskId 参数' } });
+
+  try {
+    const pollResult = await requestText({ hostname: DASHSCOPE_HOST, path: '/api/v1/tasks/' + encodeURIComponent(taskId), headers: { Authorization: 'Bearer ' + apiKey }, timeout: 20000 });
+    if (pollResult.status !== 200) return sendTranscribeJson(res, 502, { error: { message: '查询任务失败: HTTP ' + pollResult.status } });
+    const task = JSON.parse(pollResult.body);
+    const taskStatus = task && task.output && task.output.task_status;
+    if (taskStatus === 'PENDING' || taskStatus === 'RUNNING') return sendTranscribeJson(res, 200, { status: 'processing' });
+    if (taskStatus === 'FAILED') return sendTranscribeJson(res, 200, { status: 'failed', error: (task.output && task.output.message) || '任务失败' });
+    if (taskStatus !== 'SUCCEEDED') return sendTranscribeJson(res, 200, { status: 'error', message: '未知状态: ' + (taskStatus || 'unknown') });
+
+    const results = (task.output && task.output.results) || [];
+    const transcriptionUrl = (results[0] && results[0].transcription_url) || (results[0] && results[0].output && results[0].output.results && results[0].output.results[0] && results[0].output.results[0].transcription_url);
+    if (!transcriptionUrl) return sendTranscribeJson(res, 200, { status: 'completed', text: '' });
+    const transcription = new URL(transcriptionUrl);
+    const textResult = await requestText({ hostname: transcription.hostname, path: transcription.pathname + transcription.search, timeout: 10000, headers: { 'User-Agent': 'PersonalManager/1.0' } });
+    let text = '';
+    try {
+      const parsed = JSON.parse(textResult.body);
+      if (Array.isArray(parsed.transcripts)) text = parsed.transcripts.map(item => item.text || '').join(' ').trim();
+      else if (parsed.text) text = String(parsed.text).trim();
+    } catch { text = textResult.body.trim(); }
+    return sendTranscribeJson(res, 200, { status: 'completed', text });
+  } catch (error) {
+    console.error('[TranscribeStatus] 失败:', error.message);
+    return sendTranscribeJson(res, 500, { error: { message: error.message } });
+  }
+}
+
+function sendTranscribeJson(res, statusCode, data) {
+  res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+  res.end(JSON.stringify(data));
+}
+
 function proxyToTranscribe(req, res) {
   const apiKey = getDashScopeKey(req);
-  if (!apiKey) {
-    res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ error: { message: '服务端未配置 DASHSCOPE_API_KEY' } }));
-    return;
-  }
-
+  if (!apiKey) return sendTranscribeJson(res, 500, { error: { message: '服务端未配置 DASHSCOPE_API_KEY' } });
   const chunks = [];
-  req.on('data', (chunk) => { chunks.push(chunk); });
+  req.on('data', chunk => { chunks.push(chunk); });
   req.on('end', async () => {
     try {
-      const bodyBuffer = Buffer.concat(chunks);
       const contentType = req.headers['content-type'] || '';
       const boundaryMatch = contentType.match(/boundary=(-+[^\s;]+)/);
-
-      if (!boundaryMatch) {
-        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: { message: '请求格式错误，缺少 multipart boundary' } }));
-        return;
-      }
-
-      const parsed = parseMultipartFile(bodyBuffer, boundaryMatch[1]);
-      if (!parsed || !parsed.buffer || parsed.buffer.length < 100) {
-        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: { message: '未收到有效音频文件' } }));
-        return;
-      }
-
-      console.log(`[Transcribe] 音频: ${(parsed.buffer.length / 1024).toFixed(1)}KB, 文件类型: ${parsed.filename}`);
-
-      // 使用 DashScope OpenAI 兼容端点，直接发送文件（不通过 URL）
-      const mime = getMimeType(parsed.filename);
-      const boundary = '----WebKitFormBoundary' + Math.random().toString(36).slice(2);
-      const parts = [];
-
-      parts.push(Buffer.from(
-        '--' + boundary + '\r\n' +
-        'Content-Disposition: form-data; name="model"\r\n\r\n' +
-        'paraformer-v1\r\n'
-      ));
-
-      parts.push(Buffer.from(
-        '--' + boundary + '\r\n' +
-        'Content-Disposition: form-data; name="file"; filename="' + parsed.filename + '"\r\n' +
-        'Content-Type: ' + mime + '\r\n\r\n'
-      ));
-      parts.push(parsed.buffer);
-      parts.push(Buffer.from('\r\n--' + boundary + '--\r\n'));
-
-      const multipartBody = Buffer.concat(parts);
-
-      const options = {
-        hostname: DASHSCOPE_HOST,
-        port: 443,
-        path: '/compatible-mode/v1/audio/transcriptions',
-        method: 'POST',
-        headers: {
-          'Authorization': 'Bearer ' + apiKey,
-          'Content-Type': 'multipart/form-data; boundary=' + boundary,
-          'Content-Length': String(multipartBody.length),
-        },
-        timeout: 60000,
-      };
-
-      const result = await new Promise((resolve, reject) => {
-        const httpReq = https.request(options, (httpRes) => {
-          let data = '';
-          httpRes.on('data', (chunk) => { data += chunk; });
-          httpRes.on('end', () => {
-            console.log(`[Transcribe] DashScope ${httpRes.statusCode}: ${data.substring(0, 300)}`);
-            try {
-              const json = JSON.parse(data);
-              if (json.text) {
-                resolve(json.text);
-              } else {
-                reject(new Error(json.error?.message || JSON.stringify(json.error) || '转写失败'));
-              }
-            } catch (e) {
-              reject(new Error('解析转写响应失败: ' + data.substring(0, 200)));
-            }
-          });
-        });
-
-        httpReq.on('error', (e) => { reject(new Error('转写请求失败: ' + e.message)); });
-        httpReq.on('timeout', () => { httpReq.destroy(); reject(new Error('转写请求超时（60秒）')); });
-        httpReq.write(multipartBody);
-        httpReq.end();
-      });
-
-      console.log(`[Transcribe] ✅ 转写完成: "${result.substring(0, 50)}${result.length > 50 ? '...' : ''}"`);
-
-      res.writeHead(200, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Access-Control-Allow-Origin': '*',
-      });
-      res.end(JSON.stringify({ text: result }));
-    } catch (err) {
-      console.error('[Transcribe] 转写失败:', err.message);
-      res.writeHead(500, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Access-Control-Allow-Origin': '*',
-      });
-      res.end(JSON.stringify({ error: { message: err.message } }));
+      if (!boundaryMatch) return sendTranscribeJson(res, 400, { error: { message: '缺少 multipart boundary' } });
+      const parsed = parseMultipartFile(Buffer.concat(chunks), boundaryMatch[1]);
+      if (!parsed || !parsed.buffer || parsed.buffer.length < 100) return sendTranscribeJson(res, 400, { error: { message: '未收到有效音频文件' } });
+      const startedAt = Date.now();
+      const uploadStartedAt = Date.now();
+      const signedUrl = await uploadToOSS(parsed.buffer, parsed.filename, getMimeType(parsed.filename));
+      console.log('[Perf] ASR upload: ' + (Date.now() - uploadStartedAt) + 'ms');
+      const submitStartedAt = Date.now();
+      const taskId = await submitTranscriptionTask(signedUrl, apiKey);
+      console.log('[Perf] ASR submit: ' + (Date.now() - submitStartedAt) + 'ms');
+      console.log('[Perf] ASR total: ' + (Date.now() - startedAt) + 'ms');
+      console.log('[Transcribe] 已提交异步任务:', taskId);
+      return sendTranscribeJson(res, 200, { status: 'processing', taskId });
+    } catch (error) {
+      console.error('[Transcribe] 失败:', error.message);
+      return sendTranscribeJson(res, 500, { error: { message: error.message } });
     }
   });
 }
@@ -544,6 +602,12 @@ const server = http.createServer((req, res) => {
   // Proxy /api/transcribe → DashScope Paraformer 语音转写 (BEFORE /api/ general)
   if (req.url === '/api/transcribe' && req.method === 'POST') {
     proxyToTranscribe(req, res);
+    return;
+  }
+
+  // 查询语音转写任务必须在通用 /api/* 飞书代理之前处理
+  if (req.url.startsWith('/api/transcribe/status') && req.method === 'GET') {
+    handleTranscribeStatus(req, res);
     return;
   }
 

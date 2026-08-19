@@ -377,7 +377,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",R
           <option value="">阅读方式</option><option>纸质书</option><option>电子书</option>
         </select>
         <select id="readingProgress" style="padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;" onchange="readingPreviewRefresh()">
-          <option>在读</option><option>读完</option><option>未读</option>
+          <option value="">阅读进度</option><option>未读</option><option>在读</option><option>读完</option>
         </select>
         <input type="date" id="readingDate" style="padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;" onchange="readingPreviewRefresh()">
         <input type="text" id="readingNote" placeholder="阅读感悟" style="width:120px;padding:6px 8px;border:1px solid var(--gray);border-radius:8px;font-size:13px;">
@@ -626,27 +626,37 @@ const LocalRules = {
     const result = {};
     const groups = match.slice(1); // Capturing groups
     for (const [key, template] of Object.entries(action)) {
-      if (template === '__group_1__') result[key] = groups[0] || '';
-      else if (template === '__group_2__') result[key] = groups[1] || '';
-      else if (template === '__group_3__') result[key] = groups[2] || '';
+        if (template === '__group_1__') result[key] = groups[0] || '';
+        else if (template === '__group_2__') result[key] = groups[1] || '';
+        else if (template === '__group_3__') result[key] = groups[2] || '';
+        else if (template === '__positive_group_2__') result[key] = Math.abs(parseFloat(groups[1]) || 0);
+        else if (template === '__negative_group_2__') result[key] = -Math.abs(parseFloat(groups[1]) || 0);
       else if (typeof template === 'string' && template.startsWith('__literal__')) result[key] = template.replace('__literal__', '');
       else result[key] = template;
     }
     return result;
   },
 
-  // Learn a new rule from confirmed AI result
-  learn(text, result) {
+  // Learn or refresh a rule from data that the user has actually confirmed.
+  learnOrUpdate(text, result) {
     if (!text || !result || !result.module) return;
-    
-    // Auto-generate regex from natural language
     const pattern = this._generatePattern(text, result);
     if (!pattern) return;
 
-    // Check for duplicates
-    const exists = this._rules.some(r => r.pattern === pattern && r.module === result.module);
-    if (exists) {
-      Debug.log(`规则已存在，跳过: /${pattern}/`, 'info');
+    let category = result.分类 || result.类目 || result.module;
+    if (result.module === 'finance') {
+      category = normalizeFinanceCategory(category);
+    }
+
+    const action = this._generateAction({ ...result, 分类: category });
+    const existing = this._rules.find(rule => rule.pattern === pattern && rule.module === result.module);
+    if (existing) {
+      existing.category = category;
+      existing.action = action;
+      existing.hitCount = 0;
+      existing.updatedAt = new Date().toISOString();
+      this._save();
+      Debug.log(`规则已按确认数据更新: /${pattern}/`, 'rule');
       return;
     }
 
@@ -654,10 +664,11 @@ const LocalRules = {
       id: genUUID(),
       pattern,
       module: result.module,
-      category: result.分类 || result.类目 || result.module,
-      action: this._generateAction(result),
+      category,
+      action,
       hitCount: 0,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     };
 
     this._rules.push(rule);
@@ -668,6 +679,8 @@ const LocalRules = {
     Debug.log(`新规则已学习: /${pattern}/ → ${result.module}`, 'rule');
     showToast('📐 已学习新规则，下次可本地秒识别', 'success', 2000);
   },
+
+  learn(text, result) { this.learnOrUpdate(text, result); },
 
   // Generate regex from text + result
   _generatePattern(text, result) {
@@ -687,9 +700,10 @@ const LocalRules = {
       }
     }
 
-    // Add amount matching for finance
-    if (result.module === 'finance' && result.流水) {
-      patternSrc += '.*?(\\d+)';
+    // Finance actions use capture groups. Replace an amount already present in
+    // the original input instead of appending an unmatched capture group.
+    if (result.module === 'finance' && result.流水 != null) {
+      patternSrc = patternSrc.replace(/\\d+(?:\\\.\\d+)?/, '(\\d+(?:\\.\\d+)?)');
     }
 
     return patternSrc;
@@ -700,7 +714,8 @@ const LocalRules = {
     if (result.款项) action['款项'] = '__group_1__';
     if (result.书名) action['书名'] = '__group_1__';
     if (result.记录标题) action['记录标题'] = '__group_1__';
-    if (result.流水) action['流水'] = '__group_2__';
+    if (result.流水 != null) action['流水'] = Number(result.流水) < 0 ? '__negative_group_2__' : '__positive_group_2__';
+    if (result.module === 'finance') action['分类'] = '__literal__' + normalizeFinanceCategory(result.分类);
     return action;
   },
 
@@ -943,16 +958,30 @@ const FeishuAPI = {
     const token = await this.getToken();
     const opts = { method, headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json; charset=UTF-8' } };
     if (body) opts.body = JSON.stringify(body);
-    const resp = await fetch(`${this._baseUrl}${path}`, opts);
-    const json = await resp.json();
+    const requestUrl = `${this._baseUrl}${path}`;
+    const resp = await fetch(requestUrl, opts);
+    const raw = await resp.text();
+    const contentType = resp.headers.get('content-type') || '';
+    let json;
+    try {
+      json = JSON.parse(raw);
+    } catch {
+      throw new Error(`飞书 API 返回非 JSON：HTTP ${resp.status} ${requestUrl}；Content-Type: ${contentType || 'unknown'}；Body: ${raw.substring(0, 200)}`);
+    }
     if (json.code !== 0) throw new Error(`API错误[${json.code}]: ${json.msg}`);
     return json.data;
   },
 
-    async createRecord(tableId, fields) { return this._call('POST', `/v1/apps/${cfg.baseToken}/tables/${tableId}/records`, { fields }); },
-    async listRecords(tableId, params) { const qs = new URLSearchParams(params || {}).toString(); return this._call('GET', `/v1/apps/${cfg.baseToken}/tables/${tableId}/records${qs ? '?' + qs : ''}`); },
-    async updateRecord(tableId, recordId, fields) { return this._call('PUT', `/v1/apps/${cfg.baseToken}/tables/${tableId}/records/${recordId}`, { fields }); },
-    async deleteRecord(tableId, recordId) { return this._call('DELETE', `/v1/apps/${cfg.baseToken}/tables/${tableId}/records/${recordId}`); }
+    _recordsPath(tableId) {
+      if (!cfg.baseToken || !String(cfg.baseToken).trim()) throw new Error('飞书 Base Token 未配置');
+      if (!tableId || !String(tableId).trim()) throw new Error('飞书 Table ID 未配置');
+      return `/bitable/v1/apps/${cfg.baseToken}/tables/${tableId}/records`;
+    },
+
+    async createRecord(tableId, fields) { return this._call('POST', this._recordsPath(tableId), { fields }); },
+    async listRecords(tableId, params) { const qs = new URLSearchParams(params || {}).toString(); const path = this._recordsPath(tableId); return this._call('GET', path + (qs ? '?' + qs : '')); },
+    async updateRecord(tableId, recordId, fields) { return this._call('PUT', `bitable/v1/apps/${cfg.baseToken}/tables/${tableId}/records/${recordId}`, { fields }); },
+    async deleteRecord(tableId, recordId) { return this._call('DELETE', `bitable/v1/apps/${cfg.baseToken}/tables/${tableId}/records/${recordId}`); }
 };
 
 /* ===================================================================
@@ -1010,7 +1039,7 @@ const SyncManager = {
         fail++;
         const errMsg = e.data?.msg || e.data?.message || e.message || JSON.stringify(e);
         console.error(`Sync failed [module=${moduleName}, id=${rec.id}]:`, e);
-        alert(`同步失败: ${errMsg}\n\n记录ID: ${rec.id}`);
+        Debug.error(`飞书同步失败 [${moduleName}]：${errMsg}`);
       }
     }
 
@@ -1032,17 +1061,20 @@ const SyncManager = {
   _convertFields(module, data) {
     const f = { ...data };
     // Habit: convert 'habits' array → individual boolean fields
-    if (module === 'habit' && Array.isArray(f.habits)) {
+    if (module === 'habit' && Array.isArray(f.习惯 || f.habits)) {
       const allHabits = ['睡眠', '饮食', '运动', '阅读', '输出', '语言', '技能', '计划', '情绪', '冥想'];
-      const selected = f.habits;
+      const selected = f.习惯 || f.habits;
+      delete f.习惯;
       delete f.habits;
       allHabits.forEach(h => { f[h] = selected.includes(h); });
     }
     // Date conversion
     if (f.日期 && typeof f.日期 === 'string') f.日期 = this._dateToTs(f.日期);
+    if (f.开始时间 && typeof f.开始时间 === 'string') f.开始时间 = this._dateToTs(f.开始时间);
+    if (f.结束时间 && typeof f.结束时间 === 'string') f.结束时间 = this._dateToTs(f.结束时间);
     if (f.开始日期 && typeof f.开始日期 === 'string') f.开始日期 = this._dateToTs(f.开始日期);
     if (f.结束日期 && typeof f.结束日期 === 'string') f.结束日期 = this._dateToTs(f.结束日期);
-    ['DDL', '开始日期', '结束日期'].forEach(k => { if (f[k] === '' || f[k] === null || f[k] === undefined) delete f[k]; });
+    ['DDL', '开始时间', '结束时间', '开始日期', '结束日期'].forEach(k => { if (f[k] === '' || f[k] === null || f[k] === undefined) delete f[k]; });
     // Remove Local_ID if it accidentally remains in data
     delete f.Local_ID;
     return f;
@@ -1077,6 +1109,53 @@ const SyncManager = {
     updateSyncAllButton();
   }
 };
+
+/* ===================================================================
+ *   BACKGROUND SYNC — local save never waits for Feishu
+ * =================================================================== */
+const BackgroundSync = {
+  _active: new Set(),
+  _rerun: new Set(),
+
+  queue(module) {
+    if (this._active.has(module)) {
+      this._rerun.add(module);
+      return;
+    }
+    this._active.add(module);
+    setTimeout(() => { this._run(module); }, 0);
+  },
+
+  async _run(module) {
+    const startedAt = performance.now();
+    try {
+      const result = await SyncManager.syncModule(module);
+      const elapsed = Math.round(performance.now() - startedAt);
+      console.log('[Perf] Feishu sync: ' + elapsed + 'ms');
+      Debug.log('[Perf] Feishu sync: ' + elapsed + 'ms', 'info');
+      if (result && result.fail > 0) {
+        Debug.error(`飞书后台同步失败 [${module}]：${result.fail} 条记录待重试`);
+        showToast('本地已保存，飞书同步失败，稍后可重试', 'error');
+      } else if (result && result.success > 0) {
+        showToast('已同步飞书', 'success', 1800);
+      }
+    } catch (error) {
+      console.error('[BackgroundSync] ' + module + ' 失败:', error);
+      Debug.error('飞书后台同步失败 [' + module + ']：' + error.message);
+      showToast('本地已保存，飞书同步失败，稍后可重试', 'error');
+    } finally {
+      this._active.delete(module);
+      if (this._rerun.delete(module)) this.queue(module);
+    }
+  }
+};
+
+function finishLocalSave(module, startedAt) {
+  const elapsed = Math.round(performance.now() - startedAt);
+  console.log('[Perf] local save: ' + elapsed + 'ms');
+  Debug.log('[Perf] local save: ' + elapsed + 'ms', 'info');
+  BackgroundSync.queue(module);
+}
 
 /* ===================================================================
  *   NLP ENGINE (project module removed)
@@ -1133,7 +1212,7 @@ const Engine = {
     return null;
   },
   _classifyBill(item) {
-    const map = { 食: ['饭','餐','菜','外卖','零食','水果','饮料','奶茶','咖啡','面包','超市','食材','买菜','大米','油','盐'], 住: ['房租','水电','物业','网费','煤气','天然气','维修','装修','月供','房贷'], 行: ['打车','滴滴','地铁','公交','加油','停车','高铁','机票','火车','共享单车','骑行'], 工资收入: ['工资','薪资','奖金','提成','报销','兼职','外快','收入'], 人情社交: ['红包','礼物','聚餐','聚会','份子','请客','约会','社交'], 学习锻炼: ['书','课程','培训','考试','报名','健身房','运动','器材'], 休闲娱乐: ['游戏','电影','KTV','旅游','景点','门票','会员','视频','音乐','订阅'], 医疗保险: ['药','挂号','体检','医院','口罩','保险'], 外表投资: ['衣服','鞋子','包','化妆品','护肤','理发','美甲','香水'], 兴趣: ['相机','手办','模型','乐器','画材','手工'], 生活: ['日用品','纸巾','洗衣','快递','手机','充电','话费','电费'], 其他: [] };
+    const map = { 食: ['饭','餐','菜','外卖','零食','水果','苹果','牛奶','饮料','奶茶','咖啡','面包','超市','食材','买菜','大米','油','盐'], 住: ['房租','水电','物业','网费','煤气','天然气','维修','装修','月供','房贷'], 行: ['打车','滴滴','地铁','公交','加油','停车','高铁','机票','火车','共享单车','骑行'], 工资收入: ['工资','薪资','奖金','提成','报销','兼职','外快','收入'], 人情社交: ['红包','礼物','聚餐','聚会','份子','请客','约会','社交'], 学习锻炼: ['书','课程','培训','考试','报名','健身房','运动','器材'], 休闲娱乐: ['游戏','电影','KTV','旅游','景点','门票','会员','视频','音乐','订阅'], 医疗保险: ['药','挂号','体检','医院','口罩','保险'], 外表投资: ['衣服','鞋子','包','化妆品','护肤','理发','美甲','香水'], 兴趣: ['相机','手办','模型','乐器','画材','手工'], 生活: ['日用品','纸巾','洗衣','快递','手机','充电','话费','电费'], 其他: [] };
     const l = item.toLowerCase();
     for (const [cat, kws] of Object.entries(map)) { if (kws.some(k => l.includes(k))) return cat; }
     return '其他';
@@ -1166,13 +1245,22 @@ const Engine = {
   },
   parseFinance(text) {
     const t = text.trim(); if (!t) return null;
+    const normalized = this._normalizeCnNumbers(t);
+    const unitPrice = normalized.match(/(?:买了?|购买)\s*(\d+(?:\.\d+)?)\s*(?:本|个|件|袋|盒|份|杯|瓶)\s*([^，,。；;]*?)\s*[，,]?\s*(?:每(?:本|个|件|袋|盒|份|杯|瓶)?|单价)\s*(\d+(?:\.\d+)?)\s*(?:元|块|块钱|￥)/);
+    if (unitPrice) {
+      const quantity = Number(unitPrice[1]);
+      const unit = Number(unitPrice[3]);
+      const item = unitPrice[2].replace(/[，,。；;\s]+$/g, '').trim() || '日常消费';
+      const sign = /收入|工资|赚了|奖金|到账|提成|报销|退款/.test(t) ? 1 : -1;
+      return { 款项: item, 流水: sign * quantity * unit, 日期: this._parseDate(t), 分类: this._classifyBill(item), 备注: '' };
+    }
     const amt = this._parseAmount(t);
     if (amt === null) return null;
     const date = this._parseDate(t);
     // Strip amount+unit (after Chinese number normalization), then strip action/date keywords
-    let item = this._normalizeCnNumbers(t)
+    let item = normalized
       .replace(/\d+(?:\.\d+)?\s*(?:元|块|万|块钱|￥)?/g, '')
-      .replace(/记账[：:]\s*|花了|支出|消费|账单|付款|付了|支付|收入|工资|赚了|买了|到账|报销|退款|的|钱/gi, '')
+      .replace(/记账[：:]\s*|花了|支出|消费|账单|付款|付了|支付|收入|工资|赚了|买了|到账|报销|退款|一共|总共|合计|的|钱/gi, '')
       .replace(/今天|昨天|明天|前天|昨日|明日|刚刚|刚才/gi, '')
       .replace(/^我/g, '')
       .replace(/^(.?)[了过个]/g, '$1')
@@ -1196,10 +1284,12 @@ const Engine = {
       note = t.replace(bm[0], '').trim();
     }
     // Extract 感悟
-    const gainM = note.match(/感悟[：:]\s*(.+?)(?:[。，,\n]|$|进度|方式)/);
-    const gain = gainM ? gainM[1].trim() : '';
+    const gainM = note.match(/(?:阅读)?感悟[：:]\s*([\s\S]*?)(?=(?:(?:阅读)?(?:提问|问题)|进度|阅读方式|方式)[：:]|$)/);
+    const gain = gainM ? gainM[1].replace(/[，。；;\s]+$/, '').trim() : '';
+    const questionM = note.match(/(?:阅读)?(?:提问|问题|疑问)[：:]\s*([\s\S]*?)$/);
+    const question = questionM ? questionM[1].trim() : '';
     // Extract 进度 (percentage or keywords)
-    let progress = '在读';
+    let progress = '';
     const progM = note.match(/进度\s*[：:]*\s*(\d{1,3}%)/);
     if (progM) progress = progM[1];
     else if (/读完|已读|读完/.test(note)) progress = '已读';
@@ -1208,7 +1298,16 @@ const Engine = {
     // Extract 阅读方式
     const methodM = note.match(/方式[：:]\s*(.+?)(?:[。，,\n]|$)/);
     const method = methodM ? methodM[1].trim() : '';
-    return { 书名: bn, 类目: this._classifyBookCat(bn), 阅读方式: method, 进度: progress, 开始日期: this._today(), 感悟: gain };
+    return {
+      书名: bn,
+      阅读方式: normalizeReadingMethod(method || t),
+      阅读进度: normalizeReadingProgress(progress || t),
+      日期: this._parseDate(t),
+      阅读感悟: gain,
+      字数: null,
+      阅读提问: question,
+      阅读分类: this._classifyBookCat(bn)
+    };
   },
   parseDiary(text) {
     const t = text.trim(); if (!t) return null;
@@ -1297,7 +1396,7 @@ const Engine = {
       .replace(/(一|两)?(顿|份|杯|瓶|个|碗|盘|次|件|套|包|盒|箱)/g, '')
       .replace(/[，。,\s]+$/, '').trim();
     if (!title) title = '日程安排';
-    let start = date, end = date;
+    let start = '', end = '';
     if (rangeM) {
       let h1 = parseInt(rangeM[1]); let m1 = parseInt(rangeM[2] || 0);
       let h2 = parseInt(rangeM[3]); let m2 = parseInt(rangeM[4] || 0);
@@ -1308,11 +1407,11 @@ const Engine = {
       start = `${date} ${hh1}:${mm1}`; end = `${date} ${hh2}:${mm2}`;
     } else if (tm) {
       const h = tm[1].padStart(2, '0'); const m = (tm[2] || '00').padStart(2, '0');
-      start = `${date} ${h}:${m}`; end = `${date} ${String(parseInt(h) + 1).padStart(2, '0')}:${m}`;
+      start = `${date} ${h}:${m}`;
     }
     if (/明天|明日/.test(t)) { start = start.replace(this._today(), this._tomorrow()); end = end.replace(this._today(), this._tomorrow()); }
     if (/后天/.test(t)) { const after = this._ymd(new Date(Date.now()+172800000)); start = start.replace(this._today(), after); end = end.replace(this._today(), after); }
-    return { 记录标题: title, 开始日期: start, 结束日期: end, 同步日历: true, 备注: '' };
+    return { 日程标题: title, 开始时间: start.replace(/\//g, '-').replace(' ', 'T'), 结束时间: end.replace(/\//g, '-').replace(' ', 'T'), 备注: '' };
   }
 };
 
@@ -1350,6 +1449,32 @@ const AIClient = {
   }
 };
 
+/* ===================================================================
+ *   FINANCE CATEGORY NORMALIZATION
+ *   AI 返回的自然语言分类 → 系统 12 类白名单
+ * =================================================================== */
+const FINANCE_CATEGORIES = ['食','住','行','工资收入','人情社交','学习锻炼','休闲娱乐','医疗保险','外表投资','兴趣','生活','其他'];
+const FINANCE_CATEGORY_MAP = {
+  '餐饮':'食', '餐':'食', '吃':'食', '饭':'食', '外卖':'食', '超市':'食',
+  '交通':'行', '出行':'行', '车':'行', '路费':'行',
+  '工资':'工资收入', '薪':'工资收入', '收入':'工资收入', '薪水':'工资收入',
+  '人情':'人情社交', '礼':'人情社交', '红包':'人情社交', '份子钱':'人情社交',
+  '学习':'学习锻炼', '书':'学习锻炼', '课':'学习锻炼', '培训':'学习锻炼',
+  '娱乐':'休闲娱乐', '玩':'休闲娱乐', '电影':'休闲娱乐',
+  '医疗':'医疗保险', '药':'医疗保险', '看病':'医疗保险', '医院':'医疗保险',
+  '外貌':'外表投资', '美':'外表投资', '妆':'外表投资', '美容':'外表投资',
+  '兴趣':'兴趣', '爱好':'兴趣',
+  '生活':'生活', '日常':'生活', '日用品':'生活',
+  '住':'住', '房租':'住', '水电':'住'
+};
+function normalizeFinanceCategory(cat) {
+  const raw = (cat || '').trim();
+  let c = FINANCE_CATEGORY_MAP[raw] || raw;
+  if (!FINANCE_CATEGORIES.includes(c)) c = '其他';
+  if (raw && c !== raw) console.warn('[AI分类] 原始分类 "' + raw + '" 已归一化为 "' + c + '"');
+  return c;
+}
+
 async function aiParseInput(text, currentModule) {
   const today = Engine._today();
   const tomorrow = Engine._tomorrow();
@@ -1359,20 +1484,22 @@ async function aiParseInput(text, currentModule) {
 3. 返回严格的 JSON 格式，不要返回任何其他文本
 
 各模块字段要求：
-- finance: 单条时返回 { module: "finance", 款项: string, 流水: number(正为收入负为支出), 日期: "YYYY/MM/DD", 分类: string, 备注: string }；多条商品时返回 { module: "finance", items: [{款项,流水,分类}] } 数组格式
-- habit: { module: "habit", 打卡日期: "YYYY-MM-DD", 习惯名称: string, 完成数量: number, 备注: string }
-- reading: { module: "reading", 书名: string, 阅读方式: string, 进度: string, 开始日期: "YYYY-MM-DD", 感悟: string, 类目: string, 字数: number(可选), 阅读提问: string(可选) }
+- finance: 单条时返回 { module: "finance", 款项: string, 流水: number(正为收入负为支出), 日期: "YYYY-MM-DD", 分类: 必须从以下列表中选择其一（食|住|行|工资收入|人情社交|学习锻炼|休闲娱乐|医疗保险|外表投资|兴趣|生活|其他）, 备注: string }；多条商品时返回 { module: "finance", items: [{款项,流水,分类,日期,备注}] }。仅在每项金额明确时拆分；多个事项只有一个总价时返回单条组合事项；数量×单价需计算总额。
+- habit: { module: "habit", 日期: "YYYY-MM-DD", 习惯: ["固定习惯名称"] }；习惯只能从睡眠、饮食、运动、阅读、输出、语言、技能、计划、情绪、冥想中选择。
+- reading: { module: "reading", 书名: string, 阅读方式: "电子书"|"纸质书"|"", 阅读进度: "未读"|"在读"|"读完"|"", 日期: "YYYY-MM-DD", 阅读感悟: string, 字数: null, 阅读提问: string, 阅读分类: "工具库"|"技术技能"|"商业经济"|"认知思维"|"历史社会"|"自然科学"|"文学叙事" }；用户未提的方式、进度、感悟、提问必须为空；字数必须固定为 null，不得猜测。
 - diary: { module: "diary", 日期: "YYYY-MM-DD", 能量: "1星|2星|3星|4星|5星", 今日情绪: string, 今日收获: string, 关键复盘: string, 一句话: string }
-- schedule: { module: "schedule", 记录标题: string, 开始日期: "YYYY/MM/DD HH:mm", 结束日期: "YYYY/MM/DD HH:mm", 同步日历: boolean, 备注: string }
+- schedule: { module: "schedule", 日程标题: string, 开始时间: "YYYY-MM-DDTHH:mm", 结束时间: "YYYY-MM-DDTHH:mm", 备注: string }
 
 注意：
 - 书名通常用书名号《》包裹，如果没有书名号，提取开头的书名部分
 - 金额支持中文数字（如"三十元"转换为30），流水字段支出为负数、收入为正数
 - 日期中的"今天"转换为${today}，"明天"转换为${tomorrow}
-- 日程的时间范围如"从三点到五点"需要正确解析为开始和结束时间
+- 日程只有在用户明确结束时间或时长时才填写结束时间，不能假设持续一小时
 - 当前模块是 ${currentModule}，如果内容明显属于其他模块，请在 JSON 中返回正确的 module 字段
 - 如果用户一次性说了多笔消费（如"西瓜6块，牛奶7块"），请返回 items 数组格式
-- 字数(可选)和阅读提问(可选)：仅当用户明确提及字数或阅读提问时才填写，严禁 AI 捏造或强行生成`;
+- 日记的今日收获、关键复盘、一句话只能提取用户明确表达的内容；未表达时返回空字符串
+- 日记的能量只有用户明确表达星级时才填写；否则返回空字符串，由表单保留当前默认选择
+- finance 分类严禁使用列表之外的词：如"餐饮"应写"食"，"交通"应写"行"，"工资到账"应写"工资收入"`;
 
   const content = await AIClient.chat([
     { role: 'system', content: systemPrompt },
@@ -1399,13 +1526,13 @@ const Voice = {
   _mediaRecorder: null,
   _activeModule: null,
   _chunks: [],
-  _onResult: null,
+  _existingText: '',
   _stoppedByUser: false,
-  _maxDuration: 30000,
+  _maxDuration: 300000,
   _timer: null,
   supported: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
 
-  async start(module, onResult) {
+  async start(module) {
     // HTTPS or localhost required for getUserMedia
     if (!this.supported) {
       showToast('当前浏览器不支持录音功能（请使用 HTTPS 或 localhost 访问）', 'error', 5000);
@@ -1416,11 +1543,10 @@ const Voice = {
     this._stoppedByUser = false;
     this._activeModule = module;
     this._chunks = [];
-    this._onResult = onResult;
 
-    if (module === 'finance') Cart.clear();
     const input = document.getElementById(module + 'Input');
-    if (input) input.value = '🎙️ 录音中...';
+    this._existingText = input ? input.value.trim() : '';
+    if (module === 'finance') Cart.clear();
 
     try {
       this._mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1468,7 +1594,7 @@ const Voice = {
       // 最大录音时长自动停止
       this._timer = setTimeout(() => {
         if (!this._stoppedByUser && this._mediaRecorder && this._mediaRecorder.state === 'recording') {
-          showToast('录音已达最大时长(30秒)，正在转写...', 'info');
+          showToast('录音已达到5分钟上限，正在转写', 'info');
           this._stoppedByUser = true;
           this._mediaRecorder.stop();
         }
@@ -1486,7 +1612,7 @@ const Voice = {
         showToast('录音启动失败: ' + err.message, 'error');
       }
       this._stopHighlight(module);
-      if (input) input.value = '';
+      if (input) input.value = this._existingText;
       this._cleanup();
     }
   },
@@ -1514,7 +1640,7 @@ const Voice = {
       Debug.log('⚠️ 未录到有效音频 (数据过小)', 'warn');
       showToast('未录到音频，请长按录音按钮并说话', 'error', 3000);
       this._stopHighlight(module);
-      if (input) input.value = '';
+      if (input) input.value = this._existingText;
       this._cleanup();
       return;
     }
@@ -1523,8 +1649,8 @@ const Voice = {
     const blob = new Blob(this._chunks, { type: mimeType });
     this._chunks = [];
 
+    const asrStartedAt = performance.now();
     Debug.log(`📤 发送音频 ${(blob.size / 1024).toFixed(1)}KB 到转写接口 (${mimeType})`, 'info');
-    if (input) input.value = '⏳ 正在语音转写...';
     showToast('正在转写语音...', 'info', 2000);
 
     try {
@@ -1566,18 +1692,18 @@ const Voice = {
       if (!text) {
         Debug.log('⚠️ 转写返回空文本', 'warn');
         showToast('未识别到语音内容，请清晰说话后重试', 'error');
-        if (input) input.value = '';
+        if (input) input.value = this._existingText;
       } else {
         Debug.log(`✅ 转写成功: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`, 'ok');
-        if (input) input.value = text;
-        // 第一阶段暂不触发 AI 解析
-        // if (this._onResult) this._onResult(text);
+        if (input) input.value = this._existingText ? this._existingText + ' ' + text.trim() : text.trim();
+        Debug.log('[Perf] ASR total: ' + Math.round(performance.now() - asrStartedAt) + 'ms', 'info');
+        // 转写阶段只更新输入框；用户主动点击解析后才会调用 AI。
       }
     } catch (err) {
       console.error('[Voice] Transcription failed:', err);
       Debug.log('❌ 语音转写失败: ' + err.message, 'error');
       showToast('语音转写失败: ' + err.message, 'error', 4000);
-      if (input) input.value = '';
+      if (input) input.value = this._existingText;
     }
 
     this._cleanup();
@@ -1585,11 +1711,14 @@ const Voice = {
 
   // ── 轮询转写任务状态 ──
   async _pollTranscribeStatus(taskId, module) {
-    const maxAttempts = 30;   // 最多轮询 30 次
-    const interval = 2000;    // 每 2 秒一次
+    const maxAttempts = 30;
 
     for (let i = 0; i < maxAttempts; i++) {
-      await new Promise(r => setTimeout(r, interval));
+      // First status query is immediate; attempts 2-5 wait 1s, then 2s.
+      if (i > 0) {
+        const interval = i < 5 ? 1000 : 2000;
+        await new Promise(r => setTimeout(r, interval));
+      }
 
       try {
         const resp = await fetch(`/api/transcribe/status?taskId=${taskId}`);
@@ -1636,8 +1765,8 @@ const Voice = {
     this._mediaRecorder = null;
     this._chunks = [];
     this._activeModule = null;
-    this._onResult = null;
     this._currentTaskId = null;
+    this._existingText = '';
   },
 
   _highlight(module) {
@@ -1753,8 +1882,14 @@ const Debug = {
 const Cart = {
   _items: [],
 
-  add(item, price) {
-    this._items.push({ id: genUUID(), item, price: parseFloat(price) || 0 });
+  add(item, price, category, date) {
+    this._items.push({
+      id: genUUID(),
+      item,
+      price: parseFloat(price) || 0,
+      category: normalizeFinanceCategory(category),
+      date: (date || Engine._today()).replace(/\//g, '-')
+    });
     this._render();
   },
 
@@ -1793,6 +1928,7 @@ const Cart = {
       <div class="cart-item">
         <span class="cart-item-name">${this._esc(i.item)}</span>
         <span class="cart-item-price">${Math.abs(i.price)}元</span>
+        <span class="cart-item-category">${this._esc(i.category)}</span>
         <span class="cart-item-remove" onclick="Cart.remove('${i.id}')">✕</span>
       </div>
     `).join('');
@@ -1810,27 +1946,30 @@ function clearCart() { Cart.clear(); }
 function saveCartToFinance() {
   const items = Cart.getAll();
   if (items.length === 0) { showToast('购物车为空', 'warn'); return; }
-  const date = document.getElementById('financeDate').value || new Date().toISOString().split('T')[0];
-  const cat = document.getElementById('financeCat').value || '其他';
+  const localSaveStartedAt = performance.now();
   items.forEach(item => {
-    DataManager.add('finance', {
+    const data = {
       款项: item.item,
-      流水: -Math.abs(item.price),
-      日期: date.replace(/-/g, '/'),
-      分类: cat
-    });
+      流水: Number(item.price) || 0,
+      日期: (item.date || Engine._today()).replace(/-/g, '/'),
+      分类: normalizeFinanceCategory(item.category)
+    };
+    DataManager.add('finance', data);
   });
   Memory.add({ 
     userInput: `购物车批量记账 ${items.length} 笔`, 
     module: 'finance', 
     response: `已保存 ${items.length} 笔`, 
-    items: items.map(i => ({ item: i.item, price: i.price })),
+    items: items.map(i => ({ item: i.item, price: i.price, category: i.category, date: i.date })),
     type: 'batch_create'
   });
   Cart.clear();
+  // A multi-item utterance does not provide a safe one-to-one learning pattern.
+  clearLastAiParse('finance');
   SyncManager.updateModuleUI('finance');
   updateModuleBadges();
-  showToast(`已保存 ${items.length} 笔账单`, 'success');
+  showToast(`已保存 ${items.length} 笔账单，本地同步中`, 'success');
+  finishLocalSave('finance', localSaveStartedAt);
 }
 
 /* ===================================================================
@@ -1962,16 +2101,17 @@ function renderRecordCard(module, rec, hideDate) {
     case 'habit':
       fieldsHtml = `
         <div class="card-field"><span class="card-key">日期</span><span>${esc(rec.data.日期||'')}</span></div>
-        <div class="card-field"><span class="card-key">习惯</span><span>${(rec.data.habits||[]).join('、')}</span></div>`;
+        <div class="card-field"><span class="card-key">习惯</span><span>${(rec.data.习惯||rec.data.habits||[]).join('、')}</span></div>`;
       break;
     case 'reading':
       fieldsHtml = `
         <div class="card-field"><span class="card-key">书名</span><span class="card-val">${esc(rec.data.书名||'')}</span></div>
-        <div class="card-field"><span class="card-key">类目</span><span>${esc(rec.data.类目||'')}</span></div>
-        <div class="card-field"><span class="card-key">进度</span><span>${esc(rec.data.进度||'')}</span></div>
+        <div class="card-field"><span class="card-key">分类</span><span>${esc(rec.data.阅读分类||rec.data.类目||'')}</span></div>
+        <div class="card-field"><span class="card-key">进度</span><span>${esc(rec.data.阅读进度||rec.data.进度||'')}</span></div>
         <div class="card-field"><span class="card-key">方式</span><span>${esc(rec.data.阅读方式||'')}</span></div>
+        <div class="card-field"><span class="card-key">日期</span><span>${esc(rec.data.日期||rec.data.开始日期||'')}</span></div>
         ${rec.data.字数 ? `<div class="card-field"><span class="card-key">字数</span><span>${esc(String(rec.data.字数))}</span></div>` : ''}
-        ${rec.data.感悟 ? `<div class="card-field"><span class="card-key">感悟</span><span>${esc(rec.data.感悟)}</span></div>` : ''}
+        ${rec.data.阅读感悟 || rec.data.感悟 ? `<div class="card-field"><span class="card-key">感悟</span><span>${esc(rec.data.阅读感悟||rec.data.感悟)}</span></div>` : ''}
         ${rec.data.阅读提问 ? `<div class="card-field"><span class="card-key">提问</span><span>${esc(rec.data.阅读提问)}</span></div>` : ''}`;
       break;
     case 'diary':
@@ -1984,9 +2124,9 @@ function renderRecordCard(module, rec, hideDate) {
       break;
     case 'schedule':
       fieldsHtml = `
-        <div class="card-field"><span class="card-key">标题</span><span class="card-val">${esc(rec.data.记录标题||'')}</span></div>
-        <div class="card-field"><span class="card-key">开始</span><span>${esc(rec.data.开始日期||'')}</span></div>
-        <div class="card-field"><span class="card-key">结束</span><span>${esc(rec.data.结束日期||'')}</span></div>`;
+        <div class="card-field"><span class="card-key">标题</span><span class="card-val">${esc(rec.data.日程标题||rec.data.记录标题||'')}</span></div>
+        <div class="card-field"><span class="card-key">开始</span><span>${esc(rec.data.开始时间||rec.data.开始日期||'')}</span></div>
+        <div class="card-field"><span class="card-key">结束</span><span>${esc(rec.data.结束时间||rec.data.结束日期||'')}</span></div>`;
       break;
   }
 
@@ -2072,16 +2212,35 @@ function toggleModuleVoice(module) {
       return;
     }
     if (module === 'finance') { Cart.clear(); }
-    Voice.start(module, (text) => {
-      const input = document.getElementById(module + 'Input');
-      if (input) {
-        input.value = text;
-        processModuleInput(module);
-      }
-    });
+    Voice.start(module);
   } catch (e) {
     showToast('语音功能异常: ' + e.message, 'error');
   }
+}
+
+function extractExplicitFinanceItems(text) {
+  const normalized = Engine._normalizeCnNumbers(text || '');
+  const amountCount = (normalized.match(/\d+(?:\.\d+)?\s*(?:元|块|块钱|￥)/g) || []).length;
+  if (amountCount < 2 || /一共|总共|合计/.test(normalized)) return null;
+
+  const items = [];
+  const pairPattern = /(?:^|[，,；;、]\s*)(?:买了?|花了?|付了?|支付了?)?\s*([^，,；;、\d]+?)\s*(\d+(?:\.\d+)?)\s*(?:元|块|块钱|￥)/g;
+  let match;
+  while ((match = pairPattern.exec(normalized))) {
+    const item = match[1]
+      .replace(/^(?:今天|昨天|明天)?\s*(?:买了?|花了?|付了?|支付了?)/, '')
+      .replace(/^(?:又买了?|再买了?)/, '')
+      .trim();
+    if (!item || /[和及、]/.test(item)) return null;
+    items.push({
+      款项: item,
+      流水: /收入|工资|赚了|奖金|到账|提成|报销|退款/.test(normalized) ? Number(match[2]) : -Number(match[2]),
+      分类: Engine._classifyBill(item),
+      日期: Engine._parseDate(normalized),
+      备注: ''
+    });
+  }
+  return items.length > 1 ? items : null;
 }
 
 async function processModuleInput(module) {
@@ -2096,57 +2255,56 @@ async function processModuleInput(module) {
   let usedAI = false;
   let usedLocal = false;
 
-  // --- Priority 1: Local Rules (0ms, instant) ---
-  const localResult = LocalRules.match(text);
-  if (localResult && localResult.module && localResult.module !== module) {
-    // Cross-module local rule match
-    const modMap = { finance: 'finance', habit: 'habit', reading: 'reading', diary: 'diary', schedule: 'schedule' };
-    const target = modMap[localResult.module];
-    if (target && target !== module) {
-      showToast(`本地规则识别为「${target === 'finance' ? '记账' : target === 'habit' ? '习惯' : target === 'reading' ? '阅读' : target === 'diary' ? '日记' : '日程'}」模块，已自动切换`, 'info', 2500);
-      switchModule(target);
-      // Re-process after switch
-      document.getElementById(target + 'Input').value = text;
-      return;
-    }
-  }
+  const aiEnabled = !!(cfg.ai && cfg.ai.enabled && cfg.ai.key);
 
-  if (localResult) {
-    result = localResult;
-    usedLocal = true;
-    Debug.log(`本地规则命中 → ${localResult.module}`, 'ok');
-  }
-
-  // --- Priority 2: AI (async) ---
-  if (!result && cfg.ai && cfg.ai.enabled && cfg.ai.key) {
+  // AI is authoritative whenever it is configured. Local rules are only a
+  // fallback, so a stale learned rule cannot prevent AI from correcting it.
+  if (aiEnabled) {
     try {
       Debug.log('调用 AI API...', 'info');
       showToast('AI 正在解析中...', 'info', 2000);
       const aiResult = await aiParseInput(text, module);
-      if (aiResult && (aiResult.module || (aiResult.items && aiResult.items.length))) {
-        usedAI = true;
-        // Track for shadow learning on confirm
-        _lastAiParseText = text;
-        _lastAiParseResult = aiResult;
-        let aiModule = aiResult.module || module;
-        const modMap = { finance: 'finance', habit: 'habit', reading: 'reading', diary: 'diary', schedule: 'schedule' };
-        const target = modMap[aiModule] || module;
-        if (target !== module) {
-          showToast(`AI 识别为「${target === 'finance' ? '记账' : target === 'habit' ? '习惯' : target === 'reading' ? '阅读' : target === 'diary' ? '日记' : '日程'}」模块，已自动切换`, 'info', 3000);
-          switchModule(target);
-          module = target;
-        }
-        result = aiResult;
-        Debug.log('AI 解析成功', 'ok');
+      if (!aiResult || !(aiResult.module || (aiResult.items && aiResult.items.length))) throw new Error('AI 未返回可用结构化结果');
+      usedAI = true;
+      _lastAiParseText = text;
+      _lastAiParseResult = aiResult;
+      const modMap = { finance: 'finance', habit: 'habit', reading: 'reading', diary: 'diary', schedule: 'schedule' };
+      const target = modMap[aiResult.module || module] || module;
+      if (target !== module) {
+        showToast(`AI 识别为「${target === 'finance' ? '记账' : target === 'habit' ? '习惯' : target === 'reading' ? '阅读' : target === 'diary' ? '日记' : '日程'}」模块，已自动切换`, 'info', 3000);
+        switchModule(target);
+        module = target;
       }
+      result = aiResult;
+      Debug.log('AI 解析成功', 'ok');
     } catch (e) {
-      console.warn('AI parse failed, fallback to local NLP:', e);
+      console.warn('AI parse failed, falling back to local rules:', e);
       Debug.error('AI 解析失败: ' + e.message);
       showToast('AI 解析失败，回退到本地规则', 'error', 3000);
     }
   }
 
-  // --- Priority 3: Local NLP fallback ---
+  // AI disabled, unavailable, or failed: use learned rules before Engine NLP.
+  if (!result) {
+    const localResult = LocalRules.match(text);
+    if (localResult && localResult.module && localResult.module !== module) {
+      const modMap = { finance: 'finance', habit: 'habit', reading: 'reading', diary: 'diary', schedule: 'schedule' };
+      const target = modMap[localResult.module];
+      if (target && target !== module) {
+        showToast(`本地规则识别为「${target === 'finance' ? '记账' : target === 'habit' ? '习惯' : target === 'reading' ? '阅读' : target === 'diary' ? '日记' : '日程'}」模块，已自动切换`, 'info', 2500);
+        switchModule(target);
+        document.getElementById(target + 'Input').value = text;
+        return;
+      }
+    }
+    if (localResult) {
+      result = localResult;
+      usedLocal = true;
+      Debug.log(`本地规则命中 → ${localResult.module}`, 'ok');
+    }
+  }
+
+  // --- Final fallback: local NLP engine ---
   if (!result) {
     Debug.log('使用本地 NLP 引擎', 'info');
     switch (module) {
@@ -2174,45 +2332,53 @@ async function processModuleInput(module) {
     Debug.log('NLP 解析成功', 'ok');
   }
 
-  // --- Handle finance multi-item (cart mode) ---
-  if (module === 'finance' && result.items && result.items.length > 0) {
-    const date = (result.items[0].日期 || Engine._today()).replace(/\//g, '-');
-    result.items.forEach(item => {
-      Cart.add(item.款项 || item.item || '未名项', item.流水 || item.price || 0);
-    });
-    Debug.log(`购物车添加 ${result.items.length} 件商品`, 'ok');
-    showToast(`已添加 ${result.items.length} 件商品到购物车`, 'success');
-    input.value = '';
-    input.style.height = 'auto';
-    // Also fill in the preview form with the last item
-    const last = result.items[result.items.length - 1];
-    if (last) {
-      document.getElementById('financeAmount').value = Math.abs(last.流水 || last.price || 0);
-      document.getElementById('financeItem').value = last.款项 || last.item || '';
-      document.getElementById('financeCat').value = last.分类 || '其他';
-      document.getElementById('financeDate').value = date;
-      document.getElementById('financeManualBtn').disabled = false;
+  // AI may return one finance item for an utterance that explicitly contains
+  // several item/price pairs. Split only when every price mapping is explicit.
+  if (module === 'finance' && (!Array.isArray(result.items) || result.items.length <= 1)) {
+    const explicitItems = extractExplicitFinanceItems(text);
+    if (explicitItems) result = { module: 'finance', items: explicitItems };
+    else if (/(?:买了?|购买)\s*\d+(?:\.\d+)?\s*(?:本|个|件|袋|盒|份|杯|瓶).*?(?:每(?:本|个|件|袋|盒|份|杯|瓶)?|单价)\s*\d+(?:\.\d+)?\s*(?:元|块|块钱|￥)/.test(Engine._normalizeCnNumbers(text))) {
+      result = { ...Engine.parseFinance(text), module: 'finance' };
     }
-    return;
   }
 
-  // --- Handle single finance result: add to cart if from voice ---
-  if (module === 'finance' && result.流水) {
-    const amt = Math.abs(result.流水 || 0);
-    const itemName = result.款项 || '未知款项';
-    // If this was from a voice stop (input was just filled), add to cart
-    const inputEmpty = !input.value.trim();
-    if (inputEmpty || usedAI) {
-      Cart.add(itemName, -amt);
-      Debug.log(`购物车添加: ${itemName} ${amt}元`, 'ok');
+  // --- Finance: one item stays in the confirmation form; independent items use the cart. ---
+  if (module === 'finance' && Array.isArray(result.items) && result.items.length) {
+    const items = result.items;
+    if (items.length === 1) {
+      result = { ...items[0], module: 'finance' };
+    } else {
+      const names = items.map(item => (item.款项 || item.item || '未名项').trim());
+      const sameItem = names.every(name => name === names[0]);
+      if (sameItem) {
+        const amounts = items.map(item => Number(item.流水 ?? item.price) || 0);
+        const total = amounts.every(amount => amount >= 0) ? amounts.reduce((sum, amount) => sum + amount, 0)
+          : amounts.every(amount => amount <= 0) ? -amounts.reduce((sum, amount) => sum + Math.abs(amount), 0)
+          : amounts.reduce((sum, amount) => sum + amount, 0);
+        result = { ...items[0], module: 'finance', 款项: names[0], 流水: total };
+        // Multiple source values cannot safely map to one reusable local pattern.
+        clearLastAiParse('finance');
+      } else {
+        items.forEach(item => {
+          const itemName = item.款项 || item.item || '未名项';
+          let category = normalizeFinanceCategory(item.分类);
+          if (category === '其他') category = normalizeFinanceCategory(Engine._classifyBill(itemName));
+          Cart.add(itemName, item.流水 ?? item.price ?? 0, category, item.日期 || result.日期 || Engine._today());
+        });
+        Debug.log(`购物车添加 ${items.length} 件商品`, 'ok');
+        showToast(`已添加 ${items.length} 件商品到购物车`, 'success');
+        clearLastAiParse('finance');
+        input.value = '';
+        input.style.height = 'auto';
+        return;
+      }
     }
-    document.getElementById('financeAmount').value = amt;
-    document.getElementById('financeItem').value = itemName;
-    document.getElementById('financeCat').value = result.分类 || '其他';
-    document.getElementById('financeDate').value = (result.日期 || Engine._today()).replace(/\//g, '-');
-    document.getElementById('financeManualBtn').disabled = false;
-    showToast(usedAI ? 'AI 已解析账单' : usedLocal ? '本地规则已解析账单' : '已解析账单信息，请确认', 'info');
-  } 
+  }
+
+  if (module === 'finance' && result.流水 != null) {
+    fillFinanceFormFromResult(result);
+    showToast(usedAI ? 'AI 已解析账单，请确认' : usedLocal ? '本地规则已解析账单，请确认' : '已解析账单信息，请确认', 'info');
+  }
   // --- Fill other module forms ---
   else if (module !== 'finance') {
     fillFormFromResult(module, result, usedAI, usedLocal);
@@ -2234,21 +2400,24 @@ async function processModuleInput(module) {
 function fillFormFromResult(module, result, usedAI, usedLocal) {
   switch (module) {
     case 'habit':
-      document.getElementById('habitName').value = result.习惯名称 || '';
-      document.getElementById('habitCount').value = result.完成数量 || 1;
-      document.getElementById('habitDate').value = (result.打卡日期 || new Date().toISOString().split('T')[0]).replace(/\//g, '-');
+      document.getElementById('habitDate').value = (result.日期 || result.打卡日期 || new Date().toISOString().split('T')[0]).replace(/\//g, '-');
+      if (Array.isArray(result.习惯)) {
+        document.querySelectorAll('#habitGrid input').forEach(cb => {
+          cb.checked = result.习惯.includes(cb.value);
+          cb.closest('.habit-item')?.classList.toggle('checked', cb.checked);
+        });
+      }
       showToast(usedAI ? 'AI 已解析习惯信息' : (usedLocal ? '本地规则匹配' : '已解析习惯信息'), 'info');
       break;
     case 'reading':
       document.getElementById('readingTitle').value = result.书名 || '';
-      document.getElementById('readingMethod').value = result.阅读方式 || '';
-      document.getElementById('readingProgress').value = result.进度 || '在读';
-      document.getElementById('readingDate').value = (result.开始日期 || new Date().toISOString().split('T')[0]).replace(/\//g, '-');
-      document.getElementById('readingNote').value = result.感悟 || '';
-      // New fields: 字数 and 阅读提问
-      if (result.字数) document.getElementById('readingWordCount').value = result.字数;
-      if (result.阅读提问) document.getElementById('readingQuestion').value = result.阅读提问;
-      updateReadingCat(result.类目);
+      document.getElementById('readingMethod').value = normalizeReadingMethod(result.阅读方式);
+      document.getElementById('readingProgress').value = normalizeReadingProgress(result.阅读进度 || result.进度);
+      document.getElementById('readingDate').value = (result.日期 || result.开始日期 || new Date().toISOString().split('T')[0]).replace(/\//g, '-');
+      document.getElementById('readingNote').value = result.阅读感悟 || result.感悟 || '';
+      document.getElementById('readingWordCount').value = result.字数 == null ? '' : result.字数;
+      document.getElementById('readingQuestion').value = result.阅读提问 || '';
+      updateReadingCat(normalizeReadingCategory(result.阅读分类 || result.类目, result.书名));
       readingPreviewRefresh();
       document.getElementById('readingManualBtn').disabled = false;
       showToast(usedAI ? 'AI 已解析书籍信息' : (usedLocal ? '本地规则匹配' : '已解析书籍信息'), 'info');
@@ -2263,11 +2432,11 @@ function fillFormFromResult(module, result, usedAI, usedLocal) {
       showToast(usedAI ? 'AI 已解析日记信息' : (usedLocal ? '本地规则匹配' : '已解析日记信息'), 'info');
       break;
     case 'schedule':
-      document.getElementById('scheduleTitle').value = result.记录标题 || '';
+      document.getElementById('scheduleTitle').value = result.日程标题 || result.记录标题 || '';
       {
-        const st = result.开始日期 || '';
+        const st = result.开始时间 || result.开始日期 || '';
         document.getElementById('scheduleStart').value = st.replace(/\//g, '-').replace(' ', 'T');
-        document.getElementById('scheduleEnd').value = (result.结束日期 || '').replace(/\//g, '-').replace(' ', 'T');
+        document.getElementById('scheduleEnd').value = (result.结束时间 || result.结束日期 || '').replace(/\//g, '-').replace(' ', 'T');
       }
       document.getElementById('scheduleNote').value = result.备注 || '';
       showToast(usedAI ? 'AI 已解析日程信息' : (usedLocal ? '本地规则匹配' : '已解析日程信息'), 'info');
@@ -2285,14 +2454,26 @@ function financeManualChange() {
   btn.disabled = !(amt && item);
 }
 
+function fillFinanceFormFromResult(result) {
+  const flow = Number(result.流水 ?? result.price) || 0;
+  document.getElementById('financeAmount').value = Math.abs(flow);
+  document.getElementById('financeAmount').dataset.sign = flow < 0 ? '-1' : '1';
+  document.getElementById('financeItem').value = result.款项 || result.item || '未知款项';
+  document.getElementById('financeCat').value = normalizeFinanceCategory(result.分类);
+  document.getElementById('financeDate').value = (result.日期 || Engine._today()).replace(/\//g, '-');
+  document.getElementById('financeManualBtn').disabled = false;
+}
+
 function addFinanceManual() {
   const amt = parseFloat(document.getElementById('financeAmount').value.trim());
   const item = document.getElementById('financeItem').value.trim();
-  const cat = document.getElementById('financeCat').value;
+  const cat = normalizeFinanceCategory(document.getElementById('financeCat').value);
   const date = document.getElementById('financeDate').value.trim() || Engine._today();
   if (!amt || !item) return showToast('请填写金额和款项', 'error');
+  const localSaveStartedAt = performance.now();
 
-  const data = { 款项: item, 流水: amt, 日期: date, 分类: cat, 备注: '' };
+  const sign = Number(document.getElementById('financeAmount').dataset.sign) < 0 ? -1 : 1;
+  const data = { 款项: item, 流水: sign * Math.abs(amt), 日期: date, 分类: cat, 备注: '' };
   DataManager.add('finance', data);
   Memory.add({ userInput: item, module: 'finance', response: '已保存', data, type: 'create' });
   
@@ -2301,10 +2482,12 @@ function addFinanceManual() {
 
   // Clear fields
   ['financeAmount', 'financeItem', 'financeDate'].forEach(id => document.getElementById(id).value = '');
+  delete document.getElementById('financeAmount').dataset.sign;
   document.getElementById('financeManualBtn').disabled = true;
   SyncManager.updateModuleUI('finance');
   updateModuleBadges();
-  showToast('已暂存到本地', 'success');
+  showToast('已保存，本地同步中', 'success');
+  finishLocalSave('finance', localSaveStartedAt);
 }
 
 /* ===================================================================
@@ -2332,8 +2515,9 @@ function refreshHabitGrid() {
     cb.checked = false;
     cb.closest('.habit-item')?.classList.remove('checked');
   });
-  if (existing && Array.isArray(existing.data.habits)) {
-    existing.data.habits.forEach(h => {
+  const savedHabits = existing && (existing.data.习惯 || existing.data.habits);
+  if (Array.isArray(savedHabits)) {
+    savedHabits.forEach(h => {
       const cb = document.getElementById('habit-cb-' + h);
       if (cb) { cb.checked = true; cb.closest('.habit-item')?.classList.add('checked'); }
     });
@@ -2356,6 +2540,7 @@ function toggleHabit(el, habit) {
 }
 
 function saveHabitImmediate() {
+  const localSaveStartedAt = performance.now();
   const date = document.getElementById('habitDate').value;
   const checked = Array.from(document.querySelectorAll('#habitGrid input:checked')).map(cb => cb.value);
 
@@ -2373,12 +2558,13 @@ function saveHabitImmediate() {
     }
   } else {
     if (checked.length > 0) {
-      DataManager.add('habit', { 日期: date, habits: checked });
+      DataManager.add('habit', { 日期: date, 习惯: checked });
     }
   }
 
   SyncManager.updateModuleUI('habit');
   updateModuleBadges();
+  finishLocalSave('habit', localSaveStartedAt);
 }
 
 /* ===================================================================
@@ -2386,6 +2572,25 @@ function saveHabitImmediate() {
  * =================================================================== */
 const READING_CATS = ['工具库', '技术技能', '商业经济', '认知思维', '历史社会', '自然科学', '文学叙事'];
 let selectedReadingCat = '认知思维';
+
+function normalizeReadingMethod(value) {
+  const text = String(value || '').trim();
+  if (/Kindle|微信读书|电子版|PDF|手机阅读|电子书/i.test(text)) return '电子书';
+  if (/实体书|纸书|纸质版|纸质书/i.test(text)) return '纸质书';
+  return '';
+}
+
+function normalizeReadingProgress(value) {
+  const text = String(value || '').trim();
+  if (/读完|看完|已读/.test(text)) return '读完';
+  if (/未读|准备看|还没开始|想读|待读/.test(text)) return '未读';
+  if (/在读|最近在看|看了一半|\d{1,3}%/.test(text)) return '在读';
+  return '';
+}
+
+function normalizeReadingCategory(value, title) {
+  return READING_CATS.includes(value) ? value : Engine._classifyBookCat(title || '');
+}
 
 function initReadingCatRow() {
   const row = document.getElementById('readingCatRow');
@@ -2409,17 +2614,19 @@ function readingPreviewRefresh() {
 function addReadingManual() {
   const title = document.getElementById('readingTitle').value.trim();
   if (!title) { showToast('请输入书名', 'error'); return; }
-  const wordCount = parseInt(document.getElementById('readingWordCount').value) || 0;
+  const localSaveStartedAt = performance.now();
+  const wordInput = document.getElementById('readingWordCount').value.trim();
+  const wordCount = wordInput ? parseInt(wordInput, 10) : null;
   const readingQuestion = document.getElementById('readingQuestion').value.trim();
   const data = {
     书名: title,
-    类目: selectedReadingCat,
-    阅读方式: document.getElementById('readingMethod').value,
-    进度: document.getElementById('readingProgress').value,
-    开始日期: document.getElementById('readingDate').value,
-    感悟: document.getElementById('readingNote').value.trim(),
+    阅读方式: normalizeReadingMethod(document.getElementById('readingMethod').value),
+    阅读进度: normalizeReadingProgress(document.getElementById('readingProgress').value),
+    日期: document.getElementById('readingDate').value,
+    阅读感悟: document.getElementById('readingNote').value.trim(),
     字数: wordCount,
-    阅读提问: readingQuestion || ''
+    阅读提问: readingQuestion || '',
+    阅读分类: selectedReadingCat
   };
   DataManager.add('reading', data);
   Memory.add({ userInput: title, module: 'reading', response: '已保存', data, type: 'create' });
@@ -2432,7 +2639,8 @@ function addReadingManual() {
   document.getElementById('readingManualBtn').disabled = true;
   SyncManager.updateModuleUI('reading');
   updateModuleBadges();
-  showToast('已暂存到本地', 'success');
+  showToast('已保存，本地同步中', 'success');
+  finishLocalSave('reading', localSaveStartedAt);
 }
 
 /* ===================================================================
@@ -2441,6 +2649,7 @@ function addReadingManual() {
 function addDiaryManual() {
   const one = document.getElementById('diaryOne').value.trim();
   if (!one) { showToast('请至少填写一句话', 'error'); return; }
+  const localSaveStartedAt = performance.now();
   const data = {
     日期: document.getElementById('diaryDate').value || Engine._today().replace(/\//g, '-'),
     能量: document.getElementById('diaryEnergy').value,
@@ -2455,7 +2664,8 @@ function addDiaryManual() {
   ['diaryMood', 'diaryGain', 'diaryReview', 'diaryOne'].forEach(id => document.getElementById(id).value = '');
   SyncManager.updateModuleUI('diary');
   updateModuleBadges();
-  showToast('日记已暂存到本地', 'success');
+  showToast('日记已保存，本地同步中', 'success');
+  finishLocalSave('diary', localSaveStartedAt);
 }
 // Auto-enable diary button
 setInterval(() => {
@@ -2469,11 +2679,11 @@ setInterval(() => {
 function addScheduleManual() {
   const title = document.getElementById('scheduleTitle').value.trim();
   if (!title) { showToast('请输入日程标题', 'error'); return; }
+  const localSaveStartedAt = performance.now();
   const data = {
-    记录标题: title,
-    开始日期: document.getElementById('scheduleStart').value,
-    结束日期: document.getElementById('scheduleEnd').value,
-    同步日历: true,
+    日程标题: title,
+    开始时间: document.getElementById('scheduleStart').value,
+    结束时间: document.getElementById('scheduleEnd').value,
     备注: document.getElementById('scheduleNote').value.trim()
   };
   DataManager.add('schedule', data);
@@ -2484,7 +2694,8 @@ function addScheduleManual() {
   document.getElementById('scheduleEnd').value = '';
   SyncManager.updateModuleUI('schedule');
   updateModuleBadges();
-  showToast('日程已暂存到本地', 'success');
+  showToast('日程已保存，本地同步中', 'success');
+  finishLocalSave('schedule', localSaveStartedAt);
 }
 // Auto-enable schedule button
 setInterval(() => {
@@ -2738,9 +2949,16 @@ let _lastAiParseText = null;
 let _lastAiParseResult = null;
 
 function learnFromLastSave(module, data) {
-  // Only learn if we have a recent AI parse for this module
   if (_lastAiParseText && _lastAiParseResult && _lastAiParseResult.module === module) {
-    LocalRules.learn(_lastAiParseText, _lastAiParseResult);
+    // Preserve the original phrase as the pattern source, but learn every field
+    // from the form data the user has just confirmed and saved.
+    LocalRules.learnOrUpdate(_lastAiParseText, { ...data, module });
+    clearLastAiParse(module);
+  }
+}
+
+function clearLastAiParse(module) {
+  if (!module || (_lastAiParseResult && _lastAiParseResult.module === module)) {
     _lastAiParseText = null;
     _lastAiParseResult = null;
   }
@@ -2814,16 +3032,16 @@ function learnFromLastSave(module, data) {
       _readingDebounce = setTimeout(() => {
         const text = ri.value.trim();
         if (text.length < 2) return;
-        const result = Engine.parseReading(text);
-        if (result) {
-          document.getElementById('readingTitle').value = result.书名 || '';
-          document.getElementById('readingMethod').value = result.阅读方式 || '';
-          document.getElementById('readingProgress').value = result.进度 || '在读';
-          document.getElementById('readingDate').value = (result.开始日期 || new Date().toISOString().split('T')[0]).replace(/\//g, '-');
-          document.getElementById('readingNote').value = result.感悟 || '';
-          if (result.字数) document.getElementById('readingWordCount').value = result.字数;
-          if (result.阅读提问) document.getElementById('readingQuestion').value = result.阅读提问;
-          updateReadingCat(result.类目);
+          const result = Engine.parseReading(text);
+          if (result) {
+            document.getElementById('readingTitle').value = result.书名 || '';
+            document.getElementById('readingMethod').value = normalizeReadingMethod(result.阅读方式);
+            document.getElementById('readingProgress').value = normalizeReadingProgress(result.阅读进度);
+            document.getElementById('readingDate').value = (result.日期 || new Date().toISOString().split('T')[0]).replace(/\//g, '-');
+            document.getElementById('readingNote').value = result.阅读感悟 || '';
+            document.getElementById('readingWordCount').value = result.字数 == null ? '' : result.字数;
+            if (result.阅读提问) document.getElementById('readingQuestion').value = result.阅读提问;
+            updateReadingCat(normalizeReadingCategory(result.阅读分类, result.书名));
           readingPreviewRefresh();
         }
       }, 500);
